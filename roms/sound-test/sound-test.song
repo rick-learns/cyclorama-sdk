@@ -1,0 +1,177 @@
+; SPDX-FileCopyrightText: 2026 rick-learns
+; SPDX-License-Identifier: Apache-2.0
+;
+; CUE SOUND TEST — music and effects of the Sound Test cartridge (Cyclorama Development Kit).
+; "Followspot": an original upbeat theme, C major, 150 BPM (speed 6: one row = one 16th note).
+; Voice 0 lead, voice 1 bass, voice 2 chord arpeggios, voice 3 drums.
+; Form: 2-bar intro, then A (8 bars, hook) and B (8 bars, singing line), looping A-B.
+; Effects borrow voice 2 (tonal) or voice 3 (noise), so the lead and bass never drop out.
+
+; ------------------------------------------------------------------ instruments
+instrument lead         ; bright square lead, a little vibrato on held notes
+  wave pulse25
+  env 12 down 4
+  vibrato 10 24 delay 18
+
+instrument bass         ; round triangle bass, octave-bouncing eighths
+  wave triangle
+  env 15 down 3
+
+instrument major        ; 12.5% pulse chord stabs, arpeggiated every frame
+  wave pulse12
+  env 8 down 2
+  arp 0 4 7
+
+instrument minor
+  wave pulse12
+  env 8 down 2
+  arp 0 3 7
+
+instrument kick         ; short-sequence noise swept down: a chip "thump"
+  wave buzz
+  env 15 down 1
+  fixed 16000
+  slide -1200
+
+instrument snare
+  wave noise
+  env 13 down 1
+  fixed 24000
+  slide -600
+
+instrument hat
+  wave noise
+  env 6 down 1
+  fixed 60000
+
+; ------------------------------------------------------------------ lead (A: the hook)
+pattern A1 inst lead
+  G-5:2 E-5:2 C-6:4 | B-5:2 C-6:2 G-5:4
+pattern A2 inst lead
+  G-5:2 D-5:2 B-5:4 | A-5:2 B-5:2 G-5:4
+pattern A3 inst lead
+  A-5:2 E-5:2 C-6:4 | B-5:2 C-6:2 E-6:4
+pattern A4 inst lead
+  D-6:2 C-6:2 A-5:4 | F-5:2 G-5:2 A-5:4
+pattern A6 inst lead
+  G-5:2 D-5:2 B-5:4 | A-5:2 B-5:2 D-6:4
+pattern A7 inst lead
+  C-6:2 A-5:2 F-5:4 | A-5:2 C-6:2 F-6:4
+pattern A8 inst lead
+  E-6:2 D-6:2 B-5:2 G-5:2 | A-5:2 B-5:2 D-6:4
+
+; ------------------------------------------------------------------ lead (B: the long line)
+pattern B1 inst lead
+  C-6:6 B-5:2 | A-5:4 E-5:4
+pattern B2 inst lead
+  F-5:4 A-5:4 | C-6:6 A-5:2
+pattern B3 inst lead
+  G-5:6 E-5:2 | C-6:4 G-5:4
+pattern B4 inst lead
+  B-5:4 D-6:4 | B-5:4 G-5:4
+pattern B5 inst lead
+  C-6:6 B-5:2 | A-5:4 C-6:4
+pattern B6 inst lead
+  A-5:4 C-6:4 | F-6:4 E-6:4
+pattern B7 inst lead
+  D-6:4 C-6:4 | A-5:4 F-5:4
+pattern B8 inst lead
+  G-5:2 A-5:2 B-5:2 C-6:2 | D-6:4 off:4
+
+; ------------------------------------------------------------------ bass
+pattern bassC inst bass
+  C-2:2 C-3:2 C-2:2 C-3:2 | G-2:2 C-3:2 C-2:2 G-2:2
+pattern bassG inst bass
+  G-2:2 G-3:2 G-2:2 G-3:2 | D-3:2 G-3:2 G-2:2 D-3:2
+pattern bassAm inst bass
+  A-2:2 A-3:2 A-2:2 A-3:2 | E-3:2 A-3:2 A-2:2 E-3:2
+pattern bassF inst bass
+  F-2:2 F-3:2 F-2:2 F-3:2 | C-3:2 F-3:2 F-2:2 C-3:2
+pattern bassDm inst bass
+  D-2:2 D-3:2 D-2:2 D-3:2 | A-2:2 D-3:2 D-2:2 A-2:2
+
+; ------------------------------------------------------------------ chords (A: 3+3+2 stabs, B: quarters)
+pattern arpC inst major
+  C-5:6 C-5:6 C-5:4
+pattern arpG inst major
+  G-4:6 G-4:6 G-4:4
+pattern arpAm inst minor
+  A-4:6 A-4:6 A-4:4
+pattern arpF inst major
+  F-4:6 F-4:6 F-4:4
+pattern qC inst major
+  C-5:4 C-5:4 C-5:4 C-5:4
+pattern qG inst major
+  G-4:4 G-4:4 G-4:4 G-4:4
+pattern qAm inst minor
+  A-4:4 A-4:4 A-4:4 A-4:4
+pattern qF inst major
+  F-4:4 F-4:4 F-4:4 F-4:4
+pattern qDm inst minor
+  D-5:4 D-5:4 D-5:4 D-5:4
+
+; ------------------------------------------------------------------ drums
+pattern intro
+  kick --- hat --- kick --- hat --- | kick --- hat --- kick --- hat hat
+pattern beat
+  kick --- hat --- snare --- hat kick | --- kick hat --- snare --- hat hat
+pattern fill
+  kick --- hat --- snare --- hat --- | snare snare --- snare snare snare snare snare
+
+; ------------------------------------------------------------------ the song
+song theme
+  title "FOLLOWSPOT"
+  speed 6
+  voices 0 1 2 3
+  order -   bassC  arpC  intro
+  order -   bassG  arpG  fill
+  loop
+  order A1  bassC  arpC  beat
+  order A2  bassG  arpG  beat
+  order A3  bassAm arpAm beat
+  order A4  bassF  arpF  beat
+  order A1  bassC  arpC  beat
+  order A6  bassG  arpG  beat
+  order A7  bassF  arpF  beat
+  order A8  bassG  arpG  fill
+  order B1  bassAm qAm   beat
+  order B2  bassF  qF    beat
+  order B3  bassC  qC    beat
+  order B4  bassG  qG    beat
+  order B5  bassAm qAm   beat
+  order B6  bassF  qF    beat
+  order B7  bassDm qDm   beat
+  order B8  bassG  qG    fill
+
+; ------------------------------------------------------------------ sound effects
+instrument jumpy        ; square blip sliding up
+  wave pulse50
+  env 13 down 2
+  slide 48
+
+instrument chime        ; bright pickup
+  wave pulse25
+  env 12 down 2
+
+instrument sparkle      ; power-up: arpeggiated octave climb
+  wave pulse12
+  env 12 down 3
+  arp 0 4 7 12
+
+instrument blast        ; explosion: noise sweeping down
+  wave noise
+  env 15 down 3
+  fixed 9000
+  slide -150
+
+sfx jump voice 2 priority 2 inst jumpy
+  C-5:10
+
+sfx gem voice 2 priority 3 speed 3 inst chime
+  E-6 G-6 C-7:6
+
+sfx power voice 2 priority 3 speed 4 inst sparkle
+  C-5 E-5 G-5 C-6:6
+
+sfx boom voice 3 priority 4 inst blast
+  blast:40

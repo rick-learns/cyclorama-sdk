@@ -1,0 +1,81 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="examples">9 Worked examples</h2>
+
+<p>This chapter gives seven complete routines, each as CYASM source with the machine code assembled from it by hand. The listings show, for every line that produces code or data, its address and the words it produced, in hexadecimal: the first word of an instruction, then its extension word if it has one. Each word can be checked against the instruction reference in chapter 2. Cycle counts quoted in the text are from the same reference.</p>
+<p>The examples use work RAM from 8000 for their variables and the predefined register names for every I/O address. They are independent of one another; addresses were chosen so that none overlap.</p>
+
+<h3 id="ex-reset">Reset and initialisation</h3>
+<p>Bank 0 begins with the five vectors. The RESET routine sets the stack pointer (it is already C000 after a true reset, but the routine may also be entered by a jump), turns the display off, clears work RAM and VRAM, and enables the VBLANK interrupt before settling into an idle loop. The idle loop is the <code>EI</code> … <code>WAI</code> idiom of <a class="xref" href="#sys-ei"></a>: each VBLANK wakes the processor, runs the handler, and returns to <code>BRA Main</code>.</p>
+<!--GEN:example:01-reset-->
+<p>Points to note:</p>
+<ul>
+<li><code>MOV R0, #$C000</code> needs the two-word form, while <code>MOV R0, #0</code> and <code>MOV R0, #1</code> assemble to one-word MOVQ instructions (3000, 3001).</li>
+<li><code>ST R0, [R1]+</code> is 8058: group 8, register fields 000 and 001, store bit set, mode 10. The work-RAM loop costs 4 + 2 + 4 = 10 cycles per word, 81,918 cycles in all (the final BNE is not taken): about 1.4 frames.</li>
+<li>The VRAM loop writes VDATA through R3 with the one-word <code>ST R0, [R3]</code> (50C0) instead of an absolute store, saving 2 cycles per word. Each VDATA write advances VADDR by VINC, which is 2 after reset.</li>
+<li>IF is written before IE so that an event which happened during initialisation is not taken the moment interrupts are enabled.</li>
+<li>The handler acknowledges VBLANK by writing 1 to IF bit 0. <code>NoInt</code> shares the handler's RTI and serves the unused vectors.</li>
+</ul>
+<p>A real RESET routine also clears OAM (or sets the hide bit of every sprite) and loads CRAM before enabling the display.</p>
+
+<h3 id="ex-vblank">A VBLANK handler</h3>
+<p>Most games do their video updates in vertical blank, when the video ports run without wait cycles and DMA runs at full speed. This handler counts frames, copies the controller state to a variable for the main program, and loads the background scroll from a shadow variable that the main program may write at any time.</p>
+<!--GEN:example:02-vblank-->
+<ul>
+<li><code>PUSHM R0-R1</code> is B203: group B, operation 2, mask 0000 0011. It costs 2 + 2 × 2 = 6 cycles.</li>
+<li>The handler takes 78 cycles including the 12-cycle interrupt entry: about 1% of the 8,664 cycles of vertical blank.</li>
+<li>PAD1 was sampled at dot 0 of line 224, the same moment VBLANK was requested, so the handler always reads the current frame's buttons.</li>
+<li>Scroll registers are latched at dot 0 of each line; a value written here is first used for line 0 of the next frame, so the whole frame scrolls together.</li>
+</ul>
+
+<h3 id="ex-vram">Uploading to VRAM: by CPU and by DMA</h3>
+<p>Both routines copy one 8-by-8 tile (24 bytes: three bitplanes of eight rows) from ROM to tile 1, VRAM address 0018. The tile data is written with <code>.byte</code>; the listing shows it as the little-endian words the processor and the DMA channel read.</p>
+<!--GEN:example:03-vram-upload-->
+<ul>
+<li>The CPU loop costs 4 + 4 + 2 + 4 = 14 cycles per word in blanking and 16 during active display (one VDATA write per word). The final BNE is not taken, so in blanking the loop takes 12 × 14 − 2 = 166 cycles for the tile.</li>
+<li>The DMA transfer stops the processor for 4 + 2 × 12 = 28 cycles if it starts in blanking, or 4 + 4 × 12 = 52 cycles if it starts during active display. That is in addition to the 34 cycles of the eight instructions that set it up, the store to DMACTL included.</li>
+<li>DMASRC ignores bit 0, so DMA sources must be word-aligned; <code>Tile</code> follows an RTS and is therefore at an even address (0336).</li>
+<li>DMADST is a VRAM byte address, like VADDR. For OAM it would be an OAM byte address and for CRAM an entry index; see <a class="xref" href="#vid-dma"></a>.</li>
+</ul>
+
+<h3 id="ex-far-call">A far call through a bank-0 trampoline</h3>
+<p><code>Award</code> calls <code>AddScore</code>, which is in bank 3, through the trampoline <code>FarCall</code> in bank 0 (<a class="xref" href="#cart-trampoline"></a>). The target bank is passed in R6 and the address in R7; R0 carries the argument to AddScore unchanged.</p>
+<!--GEN:example:04-far-call-->
+<ul>
+<li>The trampoline keeps two words on the stack while the far routine runs: the target bank at [SP+2] and the caller's bank at [SP]. <code>LD R6, [SP+2]</code> (9C01) is the group 9 stack-relative form with displacement field 1.</li>
+<li><code>CALL [R7]</code> is CALLR, 0A70: group 0, operation 20, register field 7.</li>
+<li><code>ADD SP, #2</code> is ADDSP, B401: the field s8 holds n/2 = 1.</li>
+<li><code>MOV R7, #AddScore</code> is a forward reference, so CYASM uses the two-word form even though the value (4000) is known by the end of the pass.</li>
+<li>The listing gives bank 3's code at its window address 4000; in the ROM image it is at offset 3 × 4000 = C000.</li>
+<li>From <code>CALL FarCall</code> to the return into <code>Award</code>, the trampoline adds 48 cycles to the cost of a direct CALL.</li>
+</ul>
+
+<h3 id="ex-fmul">Fixed-point (8.8) motion with FMUL</h3>
+<p>Object positions and velocities are signed 8.8 fixed-point words: the high byte is the whole number of pixels and the low byte the fraction, so 0100 is 1.0 and FF80 is −0.5. Each frame the routine adds gravity to the vertical velocity, multiplies the horizontal velocity by a friction factor, and adds both velocities to the position. R3 points at the object, so every field is reached with the one-word <code>[Rs+d]</code> form.</p>
+<!--GEN:example:05-fmul-->
+<ul>
+<li><code>ADD R0, #Gravity</code> is ADDQ 3140 because Gravity (0040) is defined above it and fits −128…127.</li>
+<li><code>FMUL R0, #Friction</code> is 2F00 followed by 00E0 and costs 4 + 8 = 12 cycles. The whole routine costs 60 cycles.</li>
+<li>With VX = 0180 (1.5): 384 × 224 = 86,016; shifted right 8 gives 336 = 0150, which is 1.3125 = 1.5 × 0.875. With VX = FE80 (−1.5) the product is −86,016 and the result FEB0 (−1.3125). V stays 0 because both results fit.</li>
+<li>The arithmetic shift in FMUL truncates toward minus infinity, so a small negative velocity decays to FFFF (−1/256), not to 0. Games that need it to stop test for this value, or add 1 before multiplying negative values.</li>
+</ul>
+
+<h3 id="ex-jump-table">A state machine with JMPT</h3>
+<p><code>Dispatch</code> jumps to the handler for the current game state through a table of addresses. Because JMPT jumps rather than calls, each handler's RTS returns directly to Dispatch's caller.</p>
+<!--GEN:example:06-jump-table-->
+<ul>
+<li><code>JMPT R0, StateTable</code> is B500 followed by the table address 0616; the index register number is in bits 7–5 (here 0). It costs 8 cycles and reads the word at 0616 + R0 × 2.</li>
+<li>JMPT does not check its index. The CMP/BHS pair rejects any state of 3 or more, including values that would be negative if treated as signed, because BHS is an unsigned test.</li>
+<li><code>TST R1, #$80</code> has no one-word form, so it assembles to 2920 0080.</li>
+</ul>
+
+<h3 id="ex-lantern">Lantern: a light that follows a sprite</h3>
+<p>The launch technique for the light field: fill the shade planes of CRAM with darker and darker copies of the palette (plane 7 at full brightness, plane 0 black), set the ambient level to 0, and put light 0 on the player. Pixels near the light use the bright planes and the rest of the scene falls into darkness. <code>LanternInit</code> sets up the light and the display; <code>LanternUpdate</code> runs each vertical blank and moves the light to the centre of the player's 16-by-16 sprite.</p>
+<!--GEN:example:07-lantern-->
+<ul>
+<li>With intensity 7 and falloff 3, the light's level is 7 − (d &gt;&gt; 3) for a diamond distance d up to 55 and 0 beyond: shade 7 within 8 pixels of the centre, then one plane darker every 8 pixels.</li>
+<li>Sprite coordinates are signed 9-bit values and light coordinates signed 10-bit values. <code>SHL R0, #7</code> followed by <code>ASR R0, #7</code> copies bit 8 into bits 15–9, so a sprite partly off the left or top edge (X or Y from 1F0 to 1FF, that is −16 to −1) moves the light off-screen too. Each shift costs 2 cycles plus 7.</li>
+<li><code>SHL R0, #7</code> is SHLI with the count field holding 7 − 1 = 6: 0786.</li>
+<li>VCTRL = 001B enables the display (bit 0), BG0 (bit 1), sprites (bit 3) and the light field (bit 4).</li>
+<li>Light registers are latched at dot 0 of every line, so writing them in vertical blank moves the light for the whole next frame. The light field and its registers are described in <a class="xref" href="#vid-light"></a>.</li>
+</ul>

@@ -1,0 +1,8 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="registers">I/O register summary</h2>
+
+<p>This appendix lists every register in the cartridge and console I/O space, grouped by the chip that decodes it, in address order. All registers are 16 bits wide at even addresses; byte access is described in <a class="xref" href="#sys-byte-io"></a>. Unused addresses within each range read 0 and ignore writes. Every name in this appendix is predefined in CYASM as the register's address.</p>
+<p>Access: R readable, W writable, R/W both. Reset values are 0 unless the description gives another value.</p>
+
+<!--GEN:register-table-->

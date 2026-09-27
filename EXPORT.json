@@ -1,0 +1,6 @@
+{
+  "note": "This tree is a release of the open tiers of the Cyclorama project, exported from its private monorepo. tools/verify.ts reads this file to leave out the monorepo-only steps.",
+  "repo": "rick-learns/cyclorama-sdk",
+  "version": "0.1.0",
+  "source": "c58a90d86fa435859787f6f5ab13b71e88dfb84a"
+}

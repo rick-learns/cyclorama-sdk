@@ -1,0 +1,63 @@
+; SPDX-FileCopyrightText: 2026 rick-learns
+; SPDX-License-Identifier: Apache-2.0
+;
+; Tutorial 2 music (converted by tools/song.ts at build time; format: roms/lib/README.md §2).
+; SONG_theme: an original A minor loop, lead on voice 0 and bass on voice 1, 8 bars.
+; SONG_win: a short A major jingle on the same voices, played once.
+; SFX_gem: a rising chime on voice 2, which the music leaves free.
+
+instrument lead
+  wave pulse25
+  env 11 down 3
+  vibrato 8 20 delay 14
+
+instrument bass
+  wave triangle
+  env 14 down 4
+
+instrument glint
+  wave pulse12
+  env 13 down 2
+
+; ------------------------------------------------------------------ theme (speed 7: a row is an eighth)
+pattern m1 inst lead
+  A-4:2 C-5:2 E-5:2 D-5:2 | C-5:3 B-4:1 A-4:4
+pattern m2 inst lead
+  G-4:2 B-4:2 D-5:2 C-5:2 | B-4:3 A-4:1 G-4:4
+pattern m3 inst lead
+  F-4:2 A-4:2 C-5:2 E-5:2 | D-5:2 C-5:2 B-4:2 A-4:2
+pattern m4 inst lead
+  E-4:2 G#4:2 B-4:2 D-5:2 | C-5:2 B-4:2 A-4:4
+
+pattern bAm inst bass
+  A-2:2 E-3:2 A-2:2 E-3:2 | A-2:2 E-3:2 A-2:2 E-3:2
+pattern bG inst bass
+  G-2:2 D-3:2 G-2:2 D-3:2 | G-2:2 D-3:2 G-2:2 D-3:2
+pattern bF inst bass
+  F-2:2 C-3:2 F-2:2 C-3:2 | F-2:2 C-3:2 F-2:2 C-3:2
+pattern bE inst bass
+  E-2:2 B-2:2 E-2:2 B-2:2 | E-2:2 G#2:2 B-2:2 E-3:2
+
+song theme
+  speed 7
+  voices 0 1
+  loop
+  order m1 bAm
+  order m2 bG
+  order m3 bF
+  order m4 bE
+
+; ------------------------------------------------------------------ win jingle (once)
+pattern w1 inst lead
+  A-4:2 C#5:2 E-5:2 A-5:6 E-5:2 A-5:2 C#6:12 off:4
+pattern w2 inst bass
+  A-2:4 E-3:4 A-2:4 E-3:4 A-2:12 off:4
+
+song win
+  speed 5
+  voices 0 1
+  order w1 w2
+
+; ------------------------------------------------------------------ effect
+sfx gem voice 2 speed 2 inst glint
+  B-5 E-6 G#6 B-6:6

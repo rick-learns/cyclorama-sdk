@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 rick-learns
+# SPDX-License-Identifier: Apache-2.0
+#
+# https://editorconfig.org. Matches the existing files: UTF-8, LF, spaces, final newline.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+
+[*.{ts,js,mjs,json,yml,yaml}]
+trim_trailing_whitespace = true
+
+# CYASM sources align mnemonics and operands on 8-column stops.
+[*.{asm,inc}]
+indent_size = 8
+
+# Trailing spaces can be meaningful (Markdown hard breaks, pixel rows in .art, tracker rows).
+[*.{md,art,song}]
+trim_trailing_whitespace = false

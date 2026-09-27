@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 rick-learns
+# SPDX-License-Identifier: Apache-2.0
+* text=auto eol=lf
+
+# Binary: never normalise line endings, never textual-diff or merge.
+*.rom binary
+*.bin binary
+*.png binary
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.pdf binary
+*.zip binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+
+# Generated: collapsed in GitHub diffs and left out of language stats. Local `git diff` still shows
+# them in full (lockfile changes deserve a review).
+package-lock.json linguist-generated=true
+docs/manual/index.html linguist-generated=true

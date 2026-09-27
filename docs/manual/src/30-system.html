@@ -1,0 +1,143 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="system">3 Reset, interrupts and system control</h2>
+
+<p>This chapter describes what the Tally processor does at power-on and reset, how the console refuses cartridges without a valid header, the vectors, the three hardware interrupts and the software trap, the programmable timer, and how the I/O registers behave under byte access. It ends with a complete list of undefined and reserved behaviour.</p>
+
+<h3 id="sys-reset">Power-on and reset</h3>
+<p>Power-on and the RESET button have the same effect. The processor and every I/O register are set to the following state:</p>
+<table class="ruled">
+<thead><tr><th>Item</th><th>State after reset</th></tr></thead>
+<tbody>
+<tr><td>R0–R7</td><td>0000</td></tr>
+<tr><td>SP</td><td>C000 (the first PUSH writes BFFE, the top word of work RAM)</td></tr>
+<tr><td>F</td><td>0000: Z = N = C = V = 0 and I = 0 (interrupts disabled)</td></tr>
+<tr><td>PC</td><td>the word at 0000 (the RESET vector)</td></tr>
+<tr><td>BANK</td><td>1 (so 4000–7FFF shows bank 1)</td></tr>
+<tr><td>Other registers with non-zero reset values</td><td>VINC 2, LINECMP 511, BG0MAP 12 (map at 6000), BG1MAP 14 (map at 7000), FIXED 7</td></tr>
+<tr><td>Every other I/O register</td><td>0 (display disabled, all interrupt sources disabled, timer stopped, voices keyed off, master volume 0, no DMA)</td></tr>
+<tr><td>Work RAM, VRAM, OAM, CRAM</td><td><strong>Undefined.</strong> The reference model clears them to 0; real consoles do not. Software must initialise all of them.</td></tr>
+<tr><td>Cartridge RAM</td><td>Unchanged: battery-backed contents survive power-off and reset. RAMCTL = 0 protects it.</td></tr>
+</tbody>
+</table>
+<p>In the reference model execution begins at dot 0 of line 0: the first instruction of the RESET routine starts at the first master cycle of the first frame.</p>
+<p>The recommended start of every RESET routine is to load SP, disable the display, clear work RAM, VRAM, OAM and CRAM, then acknowledge any pending interrupt before enabling interrupts. <a class="xref" href="#ex-reset"></a> is a complete routine.</p>
+
+<h3 id="sys-lockout">Cartridge lockout</h3>
+<p>At reset the console reads the four bytes at ROM 0010–0013. Unless they are the ASCII characters <code>C</code>, <code>Y</code>, <code>C</code>, <code>L</code> (43 59 43 4C), the processor is held in reset and never fetches an instruction; the display stays disabled. The lockout examines no other header field, and not the checksum. The other fields describe the cartridge rather than instruct the console: whether cartridge RAM answers at C000–DFFF is a property of the board itself, and header byte 0016 declares it. The reference model, which has no physical board to consult, fits cartridge RAM exactly when byte 0016 = 1 (<a class="xref" href="#cart-ram"></a>). The header is described in <a class="xref" href="#cart-header"></a>.</p>
+
+<h3 id="sys-vectors">Vectors</h3>
+<p>The vectors are words in ROM bank 0, which is always mapped at 0000:</p>
+<table class="ruled">
+<thead><tr><th>Address</th><th>Vector</th><th>Used when</th></tr></thead>
+<tbody>
+<tr><td><code>0000</code></td><td>RESET</td><td>power-on and reset</td></tr>
+<tr><td><code>0002</code></td><td>VBLANK</td><td>VBLANK interrupt (IF bit 0)</td></tr>
+<tr><td><code>0004</code></td><td>LINE</td><td>LINE interrupt (IF bit 1)</td></tr>
+<tr><td><code>0006</code></td><td>TIMER</td><td>TIMER interrupt (IF bit 2)</td></tr>
+<tr><td><code>0008</code></td><td>TRAP</td><td>the TRAP instruction</td></tr>
+<tr><td><code>000A–000F</code></td><td>reserved</td><td>not used by the hardware; fill with 0</td></tr>
+</tbody>
+</table>
+<p>Because the vectors and the handlers they point to must be reachable whatever bank is selected, keep every handler in bank 0.</p>
+
+<h3 id="sys-interrupts">Interrupts</h3>
+<table class="ruled">
+<thead><tr><th>IE/IF bit</th><th>Source</th><th>IF bit set</th><th>Vector</th><th>Priority</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>VBLANK</td><td>at dot 0 of line 224, the start of vertical blank</td><td>0002</td><td>highest</td></tr>
+<tr><td>1</td><td>LINE</td><td>at dot 256 (start of horizontal blank) of the line on which VCOUNT = LINECMP</td><td>0004</td><td>middle</td></tr>
+<tr><td>2</td><td>TIMER</td><td>when TCOUNT is reloaded from TRELOAD (<a class="xref" href="#sys-timer"></a>)</td><td>0006</td><td>lowest</td></tr>
+</tbody>
+</table>
+<p>Each source sets its bit in <code>IF</code> whenever its event happens, whether or not it is enabled. An interrupt is <dfn>pending</dfn> when its bit is set in both <code>IE</code> and <code>IF</code>. Bits 15–3 of IE and IF are not used.</p>
+<p>The processor checks for interrupts <em>between</em> instructions, never inside one. At each check, if I = 1 and IE &amp; IF ≠ 0 (and the check does not immediately follow EI, see below), it takes the highest-priority pending source:</p>
+<pre>push(PC)          ; the address of the instruction that would have run next
+push(F)           ; F as it was, with I = 1
+I ← 0
+PC ← mem16[vector]</pre>
+<p>This sequence takes 12 cycles, plus the port wait cycles of its two pushes in the unlikely case that SP points at a video port. The stack then holds F at [SP] and the return address at [SP+2]. The handler ends with RTI, which pops F (restoring I = 1) and then PC.</p>
+<p><strong>Timing of entry.</strong> Interrupt entry is timed like an instruction: its two pushes take effect at the master-cycle time at which the entry starts, and any port wait they incur is judged at that time, exactly as for an instruction that starts at that boundary (<a class="xref" href="#ov-model"></a>).</p>
+<p><strong>Events at a boundary.</strong> An event whose time equals an instruction boundary is processed before that boundary's interrupt check, so it can be taken there. The VBLANK request at dot 0 of line 224 always falls on a boundary: with I = 1 and IE bit 0 set, the interrupt is taken at that boundary, before the instruction that would otherwise have started there. A TIMER reload on the boundary behaves the same way.</p>
+<p><strong>Acknowledging.</strong> Taking an interrupt does not clear its IF bit. The handler must write a 1 to that bit of IF; writing 1 clears a bit and writing 0 leaves it unchanged, so <code>ST R0,[IF]</code> with R0 = 0001 acknowledges VBLANK only. A handler that returns without acknowledging is entered again immediately after its RTI.</p>
+<p><strong>Latency.</strong> An event that sets an IF bit while an instruction is executing is seen at the next instruction boundary. The worst case is therefore the longest instruction (or a DMA transfer, which belongs to the instruction that started it) plus the 12 entry cycles. WAI removes the uncertainty for a program with nothing else to do.</p>
+<p><strong>Nesting.</strong> Interrupts are disabled on entry. A handler that wants to allow a higher-priority interrupt acknowledges its own IF bit first, then executes EI; RTI restores the caller's I on the way out. Priority applies only when several sources are pending at the same check; a lower-priority source can interrupt a higher-priority handler that has re-enabled interrupts.</p>
+<p><strong>Polling.</strong> With a source disabled in IE, its IF bit may be polled and cleared by software; VSTAT bit 0 also shows vertical blank directly.</p>
+
+<h4 id="sys-ei">EI, DI and the one-instruction delay</h4>
+<p><code>DI</code> clears I at once: no interrupt is taken at the boundary after it. <code>EI</code> sets I, but interrupts are not accepted at the boundary immediately after EI, only from the boundary after the following instruction. This makes two idioms safe:</p>
+<pre>        EI
+        RTS             ; returns before any pending interrupt is taken
+
+        EI
+        WAI             ; sleep; the interrupt is taken as WAI completes</pre>
+<p>The delay applies every time EI executes, even when I is already 1: a pending interrupt is never taken at the boundary directly after an EI.</p>
+<p>RTI and SETF load I directly, and the value they load applies from the next boundary.</p>
+
+<h4 id="sys-trap">TRAP</h4>
+<p><code>TRAP #n</code> is a software interrupt. It is taken whatever the value of I and IE, and does not involve IF. It pushes the address of the next instruction and F, clears I, and jumps through the vector at 0008. The number n (0–15) is not used by the processor; a handler that dispatches on it reads the TRAP instruction word at (return address − 2) and takes bits 3–0.</p>
+
+<h3 id="sys-wai">WAI and STOP</h3>
+<p><code>WAI</code> stops instruction fetch until an enabled interrupt is pending (IE &amp; IF ≠ 0). Time passes normally while it waits: the video, audio, timer and controller sampling continue. WAI completes at the first CPU-cycle boundary at or after the moment IE &amp; IF becomes non-zero. CPU-cycle boundaries are the master cycles that are multiples of 6 counted from power-on, so the processor never leaves the rhythm of its own clock. A LINE request, for example, is made at dot 256, 1024 master cycles into its line; 1024 is 4 past a boundary, so the wait ends 2 master cycles later, at 1026.</p>
+<p>If I = 1 the interrupt is then taken, and RTI returns to the instruction after WAI. If I = 0 no interrupt is taken and the next instruction follows at once; the IF bit stays set for software to examine. A WAI with IE = 0 therefore waits forever. If an enabled interrupt is already pending when WAI is reached, WAI does not wait: with I = 1 the interrupt is taken before WAI executes (its RTI returns to the WAI itself), except directly after EI, when WAI executes first and the interrupt is taken at the boundary after it; with I = 0, WAI completes at once.</p>
+<p><code>STOP</code> halts only the processor, until reset. Nothing but reset restarts it; interrupts do not. The rest of the console carries on: the timer, video, audio and controller sampling keep running, and the interrupt sources go on setting their IF bits, although no interrupt is taken. Avenell's conformance cartridges end with STOP.</p>
+
+<h3 id="sys-timer">The programmable timer</h3>
+<p>The timer is a 16-bit down-counter driven by a prescaler that counts CPU cycles:</p>
+<table class="ruled">
+<thead><tr><th>Register</th><th>Address</th><th>Function</th></tr></thead>
+<tbody>
+<tr><td><code>TRELOAD</code></td><td>F0D0</td><td>Reload value.</td></tr>
+<tr><td><code>TCOUNT</code></td><td>F0D2</td><td>The counter. Reads return the current value; writes set it directly.</td></tr>
+<tr><td><code>TCTRL</code></td><td>F0D4</td><td>Bit 0 enable; bits 2–1 prescaler P: 0 → every CPU cycle, 1 → every 16, 2 → every 64, 3 → every 256.</td></tr>
+</tbody>
+</table>
+<p>While the timer is enabled, the prescaler counts CPU cycles and every P cycles TCOUNT decrements. When TCOUNT would decrement from 0 it is instead loaded from TRELOAD and IF bit 2 is set. Any write to TCTRL resets the prescaler to the start of a period. The prescaler counts cycles whether the processor is executing, waiting in WAI or stopped by DMA.</p>
+<p>So after writing TCOUNT = c and then TCTRL, the first TIMER request comes (c + 1) × P cycles later, measured from the start of the instruction that writes TCTRL (the time at which its write takes effect), and every following one (TRELOAD + 1) × P cycles after that. Examples:</p>
+<table class="ruled">
+<thead><tr><th>Period wanted</th><th>P (TCTRL bits 2–1)</th><th>TRELOAD</th><th>TCTRL value</th></tr></thead>
+<tbody>
+<tr><td>once per line, 228 cycles</td><td>1 (0)</td><td>227</td><td>0001</td></tr>
+<tr><td>every 4 lines, 912 cycles</td><td>16 (1)</td><td>56</td><td>0003</td></tr>
+<tr><td>once per frame, 59,736 cycles</td><td>1 (0)</td><td>59,735</td><td>0001</td></tr>
+<tr><td>about 1 ms, 3,584 cycles</td><td>256 (3)</td><td>13</td><td>0007</td></tr>
+</tbody>
+</table>
+
+<h3 id="sys-byte-io">Byte access to I/O registers</h3>
+<p>Every I/O register is 16 bits wide at an even address. Byte instructions may address either half:</p>
+<ul>
+<li>A byte read (LDB) of the register at a returns the low byte of the register's value; of a + 1, the high byte.</li>
+<li>A byte write (STB) writes that half and leaves the other half unchanged, except for the command registers described below.</li>
+<li>Side effects happen on byte accesses exactly as on word accesses. A byte read or write of VDATA advances VADDR by VINC; a byte read or write of OAMDATA advances OAMADDR by 2; a byte read or write of CRAMDATA advances CRAMADDR by 1; a byte read of VSTAT clears the sprite-overflow bit; a byte read of PROBE clears the ready bit.</li>
+<li><strong>Command registers.</strong> DMACTL, V0CTRL–V3CTRL and IF hold no written value: a write is a command. They act on a word write, or on a byte write to their low byte (the even address), using the written low byte. A byte write to the high byte (odd address) is ignored.</li>
+</ul>
+<p>Word accesses at an odd address are word accesses at the even address below, as everywhere else.</p>
+
+<h3 id="sys-access-time">When register accesses take effect</h3>
+<p>The reference model applies every I/O register read and write made by an instruction at the master-cycle time at which that instruction starts, and processes timed events (line starts, interrupts, sampling) between instructions. An event due exactly at an instruction boundary is processed before that boundary's interrupt check (<a class="xref" href="#sys-interrupts"></a>). A program that polls VCOUNT or writes scroll registers from a LINE handler sees and affects the hardware at instruction granularity. Rendering uses the register values present at dot 0 of each line (<a class="xref" href="#vid-pipeline"></a>), so a write made during the horizontal blank of line y − 1 or earlier affects line y.</p>
+
+<h3 id="sys-undefined">Undefined and reserved behaviour</h3>
+<p>The following list is complete. Behaviour not listed here is defined elsewhere in this manual.</p>
+<table class="ruled">
+<thead><tr><th>Situation</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td>Reserved instruction encodings (group 0 operations 27–31, group B operations 6–15, majors C–F)</td><td>One-word, two-cycle no-operation on every Cyclorama. Reserved for future use: the assembler never emits them and software must not use them.</td></tr>
+<tr><td>Must-be-zero bits in a valid encoding</td><td>Ignored.</td></tr>
+<tr><td>Word access or instruction fetch at an odd address</td><td>Uses the even address below (bit 0 ignored).</td></tr>
+<tr><td>Write to ROM (0000–7FFF)</td><td>Ignored.</td></tr>
+<tr><td>Read of cartridge RAM space (C000–DFFF) with no RAM fitted (header byte 0016 other than 1)</td><td>Returns 0. Writes are ignored.</td></tr>
+<tr><td>Write to cartridge RAM with RAMCTL bit 0 = 0</td><td>Ignored.</td></tr>
+<tr><td>Read of an unused address in E000–E0FF or F000–F0EF</td><td>Returns 0. Writes are ignored.</td></tr>
+<tr><td>Access to E100–EFFF or F0F0–FFFF</td><td>Reads return 0; writes are ignored.</td></tr>
+<tr><td>Register bits documented as unused</td><td>Read 0; written values are ignored.</td></tr>
+<tr><td>Write to a read-only register (VSTAT, VCOUNT, PROBE, PAD1, PAD2)</td><td>Ignored.</td></tr>
+<tr><td>Read of the write-only register DMACTL</td><td>Returns 0.</td></tr>
+<tr><td>BANK selects a bank beyond the end of the ROM</td><td>The bank number wraps modulo the number of banks, which is the ROM image length ÷ 16 KiB.</td></tr>
+<tr><td>Instruction fetch, stack access or interrupt push at an I/O register address</td><td>An ordinary access to that register, with its side effects and wait cycles (<a class="xref" href="#cpu-memory"></a>).</td></tr>
+<tr><td>Contents of work RAM, VRAM, OAM and CRAM after power-on</td><td>Undefined on the console. The reference model starts them at 0. Initialise before use.</td></tr>
+<tr><td>Vectors 000A–000F</td><td>Not used.</td></tr>
+<tr><td>Stack overflow or underflow</td><td>Not detected. SP wraps at 16 bits and pushes write wherever SP points.</td></tr>
+<tr><td>JMPT index beyond the end of its table</td><td>Not checked: the word at table + Rd × 2 is used, whatever it is.</td></tr>
+</tbody>
+</table>

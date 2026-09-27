@@ -1,0 +1,333 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="audio">6 Cue audio chip (AV-3105)</h2>
+
+<p>The Cue chip (Avenell part AV-3105) produces the Cyclorama's sound: 3 tone voices and 1 noise
+voice, each with 4-bit volume and a hardware linear volume envelope, mixed to a single mono output.
+Every voice is computed digitally, one sample at a time, from the sample clock master ÷ 448. The
+behaviour described in this chapter is exact: two consoles given the same register writes at the same
+times produce the same sample values.</p>
+
+<table class="regtable" id="aud-summary">
+<caption>Cue at a glance</caption>
+<tr><th>Item</th><th>Value</th></tr>
+<tr><td>Sample clock</td><td>sample clock master ÷ 448: 47,940.34 samples per second</td></tr>
+<tr><td>Tone voices 0–2</td><td>16-bit phase accumulator; pulse (12.5%, 25%, 50%, 75%), triangle, sawtooth, 32-step 4-bit wavetable, silent</td></tr>
+<tr><td>Noise voice 3</td><td>15-bit LFSR, long (32,767-step) or short (127-step) sequence, clocked by its own accumulator</td></tr>
+<tr><td>Volume</td><td>4-bit volume (0–15) per voice, with a linear envelope; 4-bit master volume</td></tr>
+<tr><td>Output</td><td>mono; one signed mix value per sample, −13,500 to 13,500</td></tr>
+</table>
+
+<!-- ===================================================================== -->
+<h3 id="aud-clock">6.1 The sample clock</h3>
+
+<p>Cue computes one output sample every 448 master cycles, a rate of 945/44 MHz ÷ 448 =
+47,940.34 Hz. The sample clock runs continuously from reset and is not synchronised to the picture:
+a line (1368 master cycles) lasts about 3.05 samples, and a frame about 800.04 samples.</p>
+
+<p><strong>Reset state.</strong> At power-on and reset every phase accumulator (voices 0–2 and the noise accumulator Q) is 0, the noise LFSR L holds 7FFF, every voice is keyed off with volume 0, and the envelope counter is 0. Sample k (counting from k = 0 after reset) is produced at master cycle 448 × (k + 1), so the first sample falls 448 master cycles after reset.</p>
+
+<p>At each sample the chip performs, in this order:</p>
+<ol>
+<li>advances the global envelope counter and, on an envelope tick, steps the envelopes (6.6);</li>
+<li>for each voice, advances its accumulator by FREQ and computes its step value s (6.2 to 6.5);</li>
+<li>computes each voice's output from s and its volume, and forms the mix (6.7).</li>
+</ol>
+
+<p>Register writes are not part of this sequence. A write made by an instruction that starts at master
+cycle t acts at that moment and affects exactly the samples whose times are greater than t: a sample due
+at exactly t is computed first, with the old value. The envelope registers are the exception: they are
+read only at the next key-on. Several writes between two samples, for example a key-on and then a
+key-off of the same voice, apply one after another, in the order they are made, and the next sample
+sees only the result.</p>
+
+<!-- ===================================================================== -->
+<h3 id="aud-phase">6.2 The phase accumulator</h3>
+
+<p>Each tone voice has a 16-bit phase accumulator P. Once per sample,</p>
+
+<pre>
+P ← (P + FREQ) mod 65536
+</pre>
+
+<p>and the waveform is read from the new P. One full cycle of every waveform is one trip of P
+through 0–65535, so the pitch of a voice does not depend on its waveform:</p>
+
+<pre>
+frequency = FREQ × 47,940.34 / 65536 Hz          FREQ = round(frequency × 65536 / 47,940.34)
+</pre>
+
+<p>One unit of FREQ is 0.7315 Hz. FREQ = 0 holds P still; the voice then outputs a constant level.
+Above FREQ = 32768 (half the sample rate, about 23,970 Hz) the pitch folds back down and should not be
+used for musical notes. Key-on sets P to 0 (6.7).</p>
+
+<!-- ===================================================================== -->
+<h3 id="aud-waves">6.3 Waveforms</h3>
+
+<p>Each sample, a tone voice converts P into a 4-bit step value s from 0 to 15, according to the
+waveform selected by bits 2–0 of its WAVE register:</p>
+
+<table class="regtable" id="aud-wave-table">
+<caption>Tone waveforms (ViWAVE bits 2–0)</caption>
+<tr><th>Value</th><th>Waveform</th><th>Step value s</th></tr>
+<tr><td>0–3</td><td>pulse, duty k = 0–3 (12.5%, 25%, 50%, 75%)</td><td><code>s = 15 if P &lt; 8192 × {1, 2, 4, 6}[k] else 0</code></td></tr>
+<tr><td>4</td><td>triangle</td><td><code>t = P &gt;&gt; 11</code> (0–31); <code>s = t &lt; 16 ? t : 31 − t</code></td></tr>
+<tr><td>5</td><td>sawtooth</td><td><code>s = P &gt;&gt; 12</code></td></tr>
+<tr><td>6</td><td>wavetable</td><td>sample number <code>P &gt;&gt; 11</code> (0–31) of the wavetable WAVE0–WAVE7</td></tr>
+<tr><td>7</td><td>silent</td><td>none: the voice contributes 0 to the mix</td></tr>
+</table>
+
+<p>Pulse duty k gives a high portion of 8192, 16384, 32768 or 49152 of the 65536 phase steps. The
+triangle climbs 0 to 15 in its first 16 steps and falls 15 to 0 in its last 16, so each end value is
+held for two steps. The sawtooth rises through 16 steps of 4096 phase units each. The wavetable is read
+in 32 steps of 2048 phase units. The silent setting behaves as if s were exactly half way, 7.5: the
+output formula of 6.7 then gives 0, so a silent voice adds nothing to the mix whatever its volume.</p>
+
+<figure class="figure" id="fig-pulse">
+<!--@svg:wave-pulse0-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 170 84" width="170" height="84" role="img" aria-label="Pulse 12.5% (WAVE = 0)" style="max-width:100%;height:auto;display:inline-block;margin-right:8px" font-family="sans-serif" font-size="11" fill="currentColor"><text x="22" y="11" font-size="11">Pulse 12.5% (WAVE = 0)</text><line x1="22" y1="68" x2="164" y2="68" stroke="currentColor" stroke-opacity="0.35"/><line x1="22" y1="14" x2="164" y2="14" stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 2"/><text x="19" y="18" text-anchor="end" font-size="9">15</text><text x="19" y="72" text-anchor="end" font-size="9">0</text><path d="M22 14 L24.2 14 L24.2 14 L26.4 14 L26.4 14 L28.7 14 L28.7 14 L30.9 14 L30.9 14 L33.1 14 L33.1 14 L35.3 14 L35.3 14 L37.5 14 L37.5 14 L39.8 14 L39.8 68 L42 68 L42 68 L44.2 68 L44.2 68 L46.4 68 L46.4 68 L48.6 68 L48.6 68 L50.8 68 L50.8 68 L53.1 68 L53.1 68 L55.3 68 L55.3 68 L57.5 68 L57.5 68 L59.7 68 L59.7 68 L61.9 68 L61.9 68 L64.2 68 L64.2 68 L66.4 68 L66.4 68 L68.6 68 L68.6 68 L70.8 68 L70.8 68 L73 68 L73 68 L75.3 68 L75.3 68 L77.5 68 L77.5 68 L79.7 68 L79.7 68 L81.9 68 L81.9 68 L84.1 68 L84.1 68 L86.3 68 L86.3 68 L88.6 68 L88.6 68 L90.8 68 L90.8 68 L93 68 L93 68 L95.2 68 L95.2 68 L97.4 68 L97.4 68 L99.7 68 L99.7 68 L101.9 68 L101.9 68 L104.1 68 L104.1 68 L106.3 68 L106.3 68 L108.5 68 L108.5 68 L110.8 68 L110.8 68 L113 68 L113 68 L115.2 68 L115.2 68 L117.4 68 L117.4 68 L119.6 68 L119.6 68 L121.8 68 L121.8 68 L124.1 68 L124.1 68 L126.3 68 L126.3 68 L128.5 68 L128.5 68 L130.7 68 L130.7 68 L132.9 68 L132.9 68 L135.2 68 L135.2 68 L137.4 68 L137.4 68 L139.6 68 L139.6 68 L141.8 68 L141.8 68 L144 68 L144 68 L146.3 68 L146.3 68 L148.5 68 L148.5 68 L150.7 68 L150.7 68 L152.9 68 L152.9 68 L155.1 68 L155.1 68 L157.3 68 L157.3 68 L159.6 68 L159.6 68 L161.8 68 L161.8 68 L164 68" fill="none" stroke="currentColor" stroke-width="1.6"/><text x="22" y="82" font-size="9">P = 0</text><text x="164" y="82" text-anchor="end" font-size="9">65535</text></svg>
+<!--/@svg-->
+<!--@svg:wave-pulse1-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 170 84" width="170" height="84" role="img" aria-label="Pulse 25% (WAVE = 1)" style="max-width:100%;height:auto;display:inline-block;margin-right:8px" font-family="sans-serif" font-size="11" fill="currentColor"><text x="22" y="11" font-size="11">Pulse 25% (WAVE = 1)</text><line x1="22" y1="68" x2="164" y2="68" stroke="currentColor" stroke-opacity="0.35"/><line x1="22" y1="14" x2="164" y2="14" stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 2"/><text x="19" y="18" text-anchor="end" font-size="9">15</text><text x="19" y="72" text-anchor="end" font-size="9">0</text><path d="M22 14 L24.2 14 L24.2 14 L26.4 14 L26.4 14 L28.7 14 L28.7 14 L30.9 14 L30.9 14 L33.1 14 L33.1 14 L35.3 14 L35.3 14 L37.5 14 L37.5 14 L39.8 14 L39.8 14 L42 14 L42 14 L44.2 14 L44.2 14 L46.4 14 L46.4 14 L48.6 14 L48.6 14 L50.8 14 L50.8 14 L53.1 14 L53.1 14 L55.3 14 L55.3 14 L57.5 14 L57.5 68 L59.7 68 L59.7 68 L61.9 68 L61.9 68 L64.2 68 L64.2 68 L66.4 68 L66.4 68 L68.6 68 L68.6 68 L70.8 68 L70.8 68 L73 68 L73 68 L75.3 68 L75.3 68 L77.5 68 L77.5 68 L79.7 68 L79.7 68 L81.9 68 L81.9 68 L84.1 68 L84.1 68 L86.3 68 L86.3 68 L88.6 68 L88.6 68 L90.8 68 L90.8 68 L93 68 L93 68 L95.2 68 L95.2 68 L97.4 68 L97.4 68 L99.7 68 L99.7 68 L101.9 68 L101.9 68 L104.1 68 L104.1 68 L106.3 68 L106.3 68 L108.5 68 L108.5 68 L110.8 68 L110.8 68 L113 68 L113 68 L115.2 68 L115.2 68 L117.4 68 L117.4 68 L119.6 68 L119.6 68 L121.8 68 L121.8 68 L124.1 68 L124.1 68 L126.3 68 L126.3 68 L128.5 68 L128.5 68 L130.7 68 L130.7 68 L132.9 68 L132.9 68 L135.2 68 L135.2 68 L137.4 68 L137.4 68 L139.6 68 L139.6 68 L141.8 68 L141.8 68 L144 68 L144 68 L146.3 68 L146.3 68 L148.5 68 L148.5 68 L150.7 68 L150.7 68 L152.9 68 L152.9 68 L155.1 68 L155.1 68 L157.3 68 L157.3 68 L159.6 68 L159.6 68 L161.8 68 L161.8 68 L164 68" fill="none" stroke="currentColor" stroke-width="1.6"/><text x="22" y="82" font-size="9">P = 0</text><text x="164" y="82" text-anchor="end" font-size="9">65535</text></svg>
+<!--/@svg-->
+<!--@svg:wave-pulse2-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 170 84" width="170" height="84" role="img" aria-label="Pulse 50% (WAVE = 2)" style="max-width:100%;height:auto;display:inline-block;margin-right:8px" font-family="sans-serif" font-size="11" fill="currentColor"><text x="22" y="11" font-size="11">Pulse 50% (WAVE = 2)</text><line x1="22" y1="68" x2="164" y2="68" stroke="currentColor" stroke-opacity="0.35"/><line x1="22" y1="14" x2="164" y2="14" stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 2"/><text x="19" y="18" text-anchor="end" font-size="9">15</text><text x="19" y="72" text-anchor="end" font-size="9">0</text><path d="M22 14 L24.2 14 L24.2 14 L26.4 14 L26.4 14 L28.7 14 L28.7 14 L30.9 14 L30.9 14 L33.1 14 L33.1 14 L35.3 14 L35.3 14 L37.5 14 L37.5 14 L39.8 14 L39.8 14 L42 14 L42 14 L44.2 14 L44.2 14 L46.4 14 L46.4 14 L48.6 14 L48.6 14 L50.8 14 L50.8 14 L53.1 14 L53.1 14 L55.3 14 L55.3 14 L57.5 14 L57.5 14 L59.7 14 L59.7 14 L61.9 14 L61.9 14 L64.2 14 L64.2 14 L66.4 14 L66.4 14 L68.6 14 L68.6 14 L70.8 14 L70.8 14 L73 14 L73 14 L75.3 14 L75.3 14 L77.5 14 L77.5 14 L79.7 14 L79.7 14 L81.9 14 L81.9 14 L84.1 14 L84.1 14 L86.3 14 L86.3 14 L88.6 14 L88.6 14 L90.8 14 L90.8 14 L93 14 L93 68 L95.2 68 L95.2 68 L97.4 68 L97.4 68 L99.7 68 L99.7 68 L101.9 68 L101.9 68 L104.1 68 L104.1 68 L106.3 68 L106.3 68 L108.5 68 L108.5 68 L110.8 68 L110.8 68 L113 68 L113 68 L115.2 68 L115.2 68 L117.4 68 L117.4 68 L119.6 68 L119.6 68 L121.8 68 L121.8 68 L124.1 68 L124.1 68 L126.3 68 L126.3 68 L128.5 68 L128.5 68 L130.7 68 L130.7 68 L132.9 68 L132.9 68 L135.2 68 L135.2 68 L137.4 68 L137.4 68 L139.6 68 L139.6 68 L141.8 68 L141.8 68 L144 68 L144 68 L146.3 68 L146.3 68 L148.5 68 L148.5 68 L150.7 68 L150.7 68 L152.9 68 L152.9 68 L155.1 68 L155.1 68 L157.3 68 L157.3 68 L159.6 68 L159.6 68 L161.8 68 L161.8 68 L164 68" fill="none" stroke="currentColor" stroke-width="1.6"/><text x="22" y="82" font-size="9">P = 0</text><text x="164" y="82" text-anchor="end" font-size="9">65535</text></svg>
+<!--/@svg-->
+<!--@svg:wave-pulse3-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 170 84" width="170" height="84" role="img" aria-label="Pulse 75% (WAVE = 3)" style="max-width:100%;height:auto;display:inline-block;margin-right:8px" font-family="sans-serif" font-size="11" fill="currentColor"><text x="22" y="11" font-size="11">Pulse 75% (WAVE = 3)</text><line x1="22" y1="68" x2="164" y2="68" stroke="currentColor" stroke-opacity="0.35"/><line x1="22" y1="14" x2="164" y2="14" stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 2"/><text x="19" y="18" text-anchor="end" font-size="9">15</text><text x="19" y="72" text-anchor="end" font-size="9">0</text><path d="M22 14 L24.2 14 L24.2 14 L26.4 14 L26.4 14 L28.7 14 L28.7 14 L30.9 14 L30.9 14 L33.1 14 L33.1 14 L35.3 14 L35.3 14 L37.5 14 L37.5 14 L39.8 14 L39.8 14 L42 14 L42 14 L44.2 14 L44.2 14 L46.4 14 L46.4 14 L48.6 14 L48.6 14 L50.8 14 L50.8 14 L53.1 14 L53.1 14 L55.3 14 L55.3 14 L57.5 14 L57.5 14 L59.7 14 L59.7 14 L61.9 14 L61.9 14 L64.2 14 L64.2 14 L66.4 14 L66.4 14 L68.6 14 L68.6 14 L70.8 14 L70.8 14 L73 14 L73 14 L75.3 14 L75.3 14 L77.5 14 L77.5 14 L79.7 14 L79.7 14 L81.9 14 L81.9 14 L84.1 14 L84.1 14 L86.3 14 L86.3 14 L88.6 14 L88.6 14 L90.8 14 L90.8 14 L93 14 L93 14 L95.2 14 L95.2 14 L97.4 14 L97.4 14 L99.7 14 L99.7 14 L101.9 14 L101.9 14 L104.1 14 L104.1 14 L106.3 14 L106.3 14 L108.5 14 L108.5 14 L110.8 14 L110.8 14 L113 14 L113 14 L115.2 14 L115.2 14 L117.4 14 L117.4 14 L119.6 14 L119.6 14 L121.8 14 L121.8 14 L124.1 14 L124.1 14 L126.3 14 L126.3 14 L128.5 14 L128.5 68 L130.7 68 L130.7 68 L132.9 68 L132.9 68 L135.2 68 L135.2 68 L137.4 68 L137.4 68 L139.6 68 L139.6 68 L141.8 68 L141.8 68 L144 68 L144 68 L146.3 68 L146.3 68 L148.5 68 L148.5 68 L150.7 68 L150.7 68 L152.9 68 L152.9 68 L155.1 68 L155.1 68 L157.3 68 L157.3 68 L159.6 68 L159.6 68 L161.8 68 L161.8 68 L164 68" fill="none" stroke="currentColor" stroke-width="1.6"/><text x="22" y="82" font-size="9">P = 0</text><text x="164" y="82" text-anchor="end" font-size="9">65535</text></svg>
+<!--/@svg-->
+<figcaption>Figure 6-1. Pulse waveforms, duty 12.5%, 25%, 50% and 75%: s against P over one cycle.</figcaption>
+</figure>
+
+<figure class="figure" id="fig-triangle">
+<!--@svg:wave-triangle-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 84" width="240" height="84" role="img" aria-label="Triangle (WAVE = 4)" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><text x="22" y="11" font-size="11">Triangle (WAVE = 4)</text><line x1="22" y1="68" x2="234" y2="68" stroke="currentColor" stroke-opacity="0.35"/><line x1="22" y1="14" x2="234" y2="14" stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 2"/><text x="19" y="18" text-anchor="end" font-size="9">15</text><text x="19" y="72" text-anchor="end" font-size="9">0</text><path d="M22 68 L28.6 68 L28.6 64.4 L35.3 64.4 L35.3 60.8 L41.9 60.8 L41.9 57.2 L48.5 57.2 L48.5 53.6 L55.1 53.6 L55.1 50 L61.8 50 L61.8 46.4 L68.4 46.4 L68.4 42.8 L75 42.8 L75 39.2 L81.6 39.2 L81.6 35.6 L88.3 35.6 L88.3 32 L94.9 32 L94.9 28.4 L101.5 28.4 L101.5 24.8 L108.1 24.8 L108.1 21.2 L114.8 21.2 L114.8 17.6 L121.4 17.6 L121.4 14 L128 14 L128 14 L134.6 14 L134.6 17.6 L141.3 17.6 L141.3 21.2 L147.9 21.2 L147.9 24.8 L154.5 24.8 L154.5 28.4 L161.1 28.4 L161.1 32 L167.8 32 L167.8 35.6 L174.4 35.6 L174.4 39.2 L181 39.2 L181 42.8 L187.6 42.8 L187.6 46.4 L194.3 46.4 L194.3 50 L200.9 50 L200.9 53.6 L207.5 53.6 L207.5 57.2 L214.1 57.2 L214.1 60.8 L220.8 60.8 L220.8 64.4 L227.4 64.4 L227.4 68 L234 68" fill="none" stroke="currentColor" stroke-width="1.6"/><text x="22" y="82" font-size="9">P = 0</text><text x="234" y="82" text-anchor="end" font-size="9">65535</text></svg>
+<!--/@svg-->
+<figcaption>Figure 6-2. Triangle: 32 steps per cycle.</figcaption>
+</figure>
+
+<figure class="figure" id="fig-saw">
+<!--@svg:wave-saw-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 84" width="240" height="84" role="img" aria-label="Sawtooth (WAVE = 5)" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><text x="22" y="11" font-size="11">Sawtooth (WAVE = 5)</text><line x1="22" y1="68" x2="234" y2="68" stroke="currentColor" stroke-opacity="0.35"/><line x1="22" y1="14" x2="234" y2="14" stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 2"/><text x="19" y="18" text-anchor="end" font-size="9">15</text><text x="19" y="72" text-anchor="end" font-size="9">0</text><path d="M22 68 L35.3 68 L35.3 64.4 L48.5 64.4 L48.5 60.8 L61.8 60.8 L61.8 57.2 L75 57.2 L75 53.6 L88.3 53.6 L88.3 50 L101.5 50 L101.5 46.4 L114.8 46.4 L114.8 42.8 L128 42.8 L128 39.2 L141.3 39.2 L141.3 35.6 L154.5 35.6 L154.5 32 L167.8 32 L167.8 28.4 L181 28.4 L181 24.8 L194.3 24.8 L194.3 21.2 L207.5 21.2 L207.5 17.6 L220.8 17.6 L220.8 14 L234 14" fill="none" stroke="currentColor" stroke-width="1.6"/><text x="22" y="82" font-size="9">P = 0</text><text x="234" y="82" text-anchor="end" font-size="9">65535</text></svg>
+<!--/@svg-->
+<figcaption>Figure 6-3. Sawtooth: 16 steps per cycle.</figcaption>
+</figure>
+
+<figure class="figure" id="fig-wavetable">
+<!--@svg:wave-table-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 84" width="240" height="84" role="img" aria-label="Wavetable (WAVE = 6), sine example" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><text x="22" y="11" font-size="11">Wavetable (WAVE = 6), sine example</text><line x1="22" y1="68" x2="234" y2="68" stroke="currentColor" stroke-opacity="0.35"/><line x1="22" y1="14" x2="234" y2="14" stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 2"/><text x="19" y="18" text-anchor="end" font-size="9">15</text><text x="19" y="72" text-anchor="end" font-size="9">0</text><path d="M22 39.2 L28.6 39.2 L28.6 35.6 L35.3 35.6 L35.3 32 L41.9 32 L41.9 24.8 L48.5 24.8 L48.5 21.2 L55.1 21.2 L55.1 17.6 L61.8 17.6 L61.8 17.6 L68.4 17.6 L68.4 14 L75 14 L75 14 L81.6 14 L81.6 14 L88.3 14 L88.3 17.6 L94.9 17.6 L94.9 17.6 L101.5 17.6 L101.5 21.2 L108.1 21.2 L108.1 24.8 L114.8 24.8 L114.8 32 L121.4 32 L121.4 35.6 L128 35.6 L128 39.2 L134.6 39.2 L134.6 46.4 L141.3 46.4 L141.3 50 L147.9 50 L147.9 57.2 L154.5 57.2 L154.5 60.8 L161.1 60.8 L161.1 64.4 L167.8 64.4 L167.8 64.4 L174.4 64.4 L174.4 68 L181 68 L181 68 L187.6 68 L187.6 68 L194.3 68 L194.3 64.4 L200.9 64.4 L200.9 64.4 L207.5 64.4 L207.5 60.8 L214.1 60.8 L214.1 57.2 L220.8 57.2 L220.8 50 L227.4 50 L227.4 46.4 L234 46.4" fill="none" stroke="currentColor" stroke-width="1.6"/><text x="22" y="82" font-size="9">P = 0</text><text x="234" y="82" text-anchor="end" font-size="9">65535</text></svg>
+<!--/@svg-->
+<figcaption>Figure 6-4. Wavetable holding the sine example of 6.4.</figcaption>
+</figure>
+
+<!-- ===================================================================== -->
+<h3 id="aud-wavetable">6.4 Wavetable packing</h3>
+
+<p>The wavetable is one table of 32 four-bit samples shared by all three tone voices, held in the eight
+registers WAVE0–WAVE7. Each register holds four samples; register WAVEi holds samples 4i to 4i + 3:</p>
+
+<table class="bits" id="aud-wave-bits">
+<caption>WAVEi (i = 0–7)</caption>
+<tr><th>Bits</th><th>15–12</th><th>11–8</th><th>7–4</th><th>3–0</th></tr>
+<tr><td>Sample</td><td>4i + 3</td><td>4i + 2</td><td>4i + 1</td><td>4i</td></tr>
+</table>
+
+<p>So sample j is in register WAVE(j &gt;&gt; 2), bits 4 × (j &amp; 3) to 4 × (j &amp; 3) + 3. A write to a
+WAVE register affects every voice playing the wavetable from the next sample.</p>
+
+<h4 id="aud-wave-example">Worked example: a sine table</h4>
+
+<p>For a sine, sample j = round(7.5 + 7.5 × sin(2π × j / 32)). The 32 samples are
+8, 9, 10, 12, 13, 14, 14, 15, 15, 15, 14, 14, 13, 12, 10, 9, 8, 6, 5, 3, 2, 1, 1, 0, 0, 0, 1, 1, 2, 3, 5, 6.
+Samples 0–3 (8, 9, 10, 12) pack as C in bits 15–12, A in bits 11–8, 9 in bits 7–4 and 8 in bits 3–0:
+WAVE0 = CA98.</p>
+
+<table class="regtable" id="wave-example" data-samples="8,9,10,12,13,14,14,15,15,15,14,14,13,12,10,9,8,6,5,3,2,1,1,0,0,0,1,1,2,3,5,6">
+<caption>Sine wavetable, packed</caption>
+<tr><th>Register</th><th>Value (hex)</th><th>Samples</th></tr>
+<tr><td>WAVE0</td><td>CA98</td><td>8, 9, 10, 12</td></tr>
+<tr><td>WAVE1</td><td>FEED</td><td>13, 14, 14, 15</td></tr>
+<tr><td>WAVE2</td><td>EEFF</td><td>15, 15, 14, 14</td></tr>
+<tr><td>WAVE3</td><td>9ACD</td><td>13, 12, 10, 9</td></tr>
+<tr><td>WAVE4</td><td>3568</td><td>8, 6, 5, 3</td></tr>
+<tr><td>WAVE5</td><td>0112</td><td>2, 1, 1, 0</td></tr>
+<tr><td>WAVE6</td><td>1100</td><td>0, 0, 1, 1</td></tr>
+<tr><td>WAVE7</td><td>6532</td><td>2, 3, 5, 6</td></tr>
+</table>
+
+<!-- ===================================================================== -->
+<h3 id="aud-noise">6.5 The noise voice</h3>
+
+<p>Voice 3 produces noise from a 15-bit linear-feedback shift register L. Key-on seeds L with 7FFF (all
+ones). Voice 3 also has a 16-bit accumulator Q, advanced by V3FREQ once per sample; each time the
+addition carries past FFFF (Q + V3FREQ ≥ 65536, after which Q keeps the low 16 bits) the register shifts
+once:</p>
+
+<pre>
+b = (L ^ (L &gt;&gt; 1)) &amp; 1                  feedback: bit 0 exclusive-or bit 1
+L = (L &gt;&gt; 1) | (b &lt;&lt; 14)                shift right, feedback into bit 14
+in short mode (V3WAVE bit 0 = 1), also:
+L = (L &amp; ~0x40) | (b &lt;&lt; 6)              feedback also into bit 6
+</pre>
+
+<p>The step value is taken from bit 0 of L after any shift that sample:
+<code>s = (L &amp; 1) ? 0 : 15</code>. Since V3FREQ is at most FFFF, L shifts at most once per sample; the
+shift rate is V3FREQ × 47,940.34 / 65536 per second. Key-on does not change Q.</p>
+
+<p>In long mode the sequence repeats every 32,767 shifts and sounds as a hiss. In short mode bits 6–0 of
+L form a 7-bit register; after the first shift the output repeats every 127 shifts and sounds as a
+buzzing, pitched tone.</p>
+
+<p>The first steps after key-on (one value of s per shift) are, for long mode:</p>
+<pre id="lfsr-long" data-steps="0,0,0,0,0,0,0,0,0,0,0,0,0,0,15,15,15,15,15,15,15,15,15,15,15,15,15,15,0,15,15,15">
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 15 15 15 15 15 15 15 15 15 15 15 15 15 15 0 15 15 15
+</pre>
+<p>and for short mode:</p>
+<pre id="lfsr-short" data-steps="0,0,0,0,0,0,15,15,15,15,15,15,0,15,15,15,15,15,0,0,15,15,15,15,0,15,0,15,15,15,0,0">
+0 0 0 0 0 0 15 15 15 15 15 15 0 15 15 15 15 15 0 0 15 15 15 15 0 15 0 15 15 15 0 0
+</pre>
+
+<figure class="figure" id="fig-noise">
+<!--@svg:wave-noise-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 84" width="360" height="84" role="img" aria-label="Noise, long mode, first 64 shifts after key-on" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><text x="22" y="11" font-size="11">Noise, long mode, first 64 shifts after key-on</text><line x1="22" y1="68" x2="354" y2="68" stroke="currentColor" stroke-opacity="0.35"/><line x1="22" y1="14" x2="354" y2="14" stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="2 2"/><text x="19" y="18" text-anchor="end" font-size="9">15</text><text x="19" y="72" text-anchor="end" font-size="9">0</text><path d="M22 68 L27.2 68 L27.2 68 L32.4 68 L32.4 68 L37.6 68 L37.6 68 L42.8 68 L42.8 68 L47.9 68 L47.9 68 L53.1 68 L53.1 68 L58.3 68 L58.3 68 L63.5 68 L63.5 68 L68.7 68 L68.7 68 L73.9 68 L73.9 68 L79.1 68 L79.1 68 L84.3 68 L84.3 68 L89.4 68 L89.4 68 L94.6 68 L94.6 14 L99.8 14 L99.8 14 L105 14 L105 14 L110.2 14 L110.2 14 L115.4 14 L115.4 14 L120.6 14 L120.6 14 L125.8 14 L125.8 14 L130.9 14 L130.9 14 L136.1 14 L136.1 14 L141.3 14 L141.3 14 L146.5 14 L146.5 14 L151.7 14 L151.7 14 L156.9 14 L156.9 14 L162.1 14 L162.1 14 L167.3 14 L167.3 68 L172.4 68 L172.4 14 L177.6 14 L177.6 14 L182.8 14 L182.8 14 L188 14 L188 14 L193.2 14 L193.2 14 L198.4 14 L198.4 14 L203.6 14 L203.6 14 L208.8 14 L208.8 14 L213.9 14 L213.9 14 L219.1 14 L219.1 14 L224.3 14 L224.3 14 L229.5 14 L229.5 14 L234.7 14 L234.7 14 L239.9 14 L239.9 68 L245.1 68 L245.1 68 L250.3 68 L250.3 14 L255.4 14 L255.4 14 L260.6 14 L260.6 14 L265.8 14 L265.8 14 L271 14 L271 14 L276.2 14 L276.2 14 L281.4 14 L281.4 14 L286.6 14 L286.6 14 L291.8 14 L291.8 14 L296.9 14 L296.9 14 L302.1 14 L302.1 14 L307.3 14 L307.3 14 L312.5 14 L312.5 68 L317.7 68 L317.7 14 L322.9 14 L322.9 68 L328.1 68 L328.1 14 L333.3 14 L333.3 14 L338.4 14 L338.4 14 L343.6 14 L343.6 14 L348.8 14 L348.8 14 L354 14" fill="none" stroke="currentColor" stroke-width="1.6"/><text x="22" y="82" font-size="9">shift 1</text><text x="354" y="82" text-anchor="end" font-size="9">shift 64</text></svg>
+<!--/@svg-->
+<figcaption>Figure 6-5. The first 64 long-mode noise steps after key-on.</figcaption>
+</figure>
+
+<!-- ===================================================================== -->
+<h3 id="aud-env">6.6 Envelopes</h3>
+
+<p>Each voice has a linear volume envelope, set by its ENV register:</p>
+
+<table class="bits" id="aud-env-bits">
+<caption>ViENV (i = 0–3)</caption>
+<tr><th>Bits</th><th>Meaning</th></tr>
+<tr><td>3–0</td><td>starting volume 0–15, loaded at key-on</td></tr>
+<tr><td>4</td><td>direction: 0 = the volume falls, 1 = it rises</td></tr>
+<tr><td>7–5</td><td>step period p in envelope ticks, 1–7; 0 = hold (the volume does not change)</td></tr>
+</table>
+
+<p>An <em>envelope tick</em> occurs every 750 samples, counted by a single counter that starts at 0 at reset
+and is shared by all voices (the tick falls on samples k = 749, 1499, 2249, …, before that sample's accumulator step): 63.92 ticks per second, one every 15.64 ms. Each voice also counts ticks
+from its own key-on. For a voice with p &gt; 0, every p ticks its volume moves one step in its direction,
+stopping at 0 when falling or at 15 when rising, where it stays until the next key-on. Key-on zeroes the
+voice's own tick count, and the voice counts only the ticks of samples produced after the key-on write,
+so its first step comes on the p-th such tick. A tick on a sample due at exactly the time of the key-on
+write belongs to a sample computed before the write and is not counted.</p>
+
+<p>The ENV register is read at key-on only: changing it while a note sounds affects the next note. A
+full fall from 15 to 0 takes 15 × p ticks, from about 0.23 seconds with p = 1 to about 1.64 seconds with
+p = 7.</p>
+
+<!-- ===================================================================== -->
+<h3 id="aud-key">6.7 Key-on, key-off, volume and mixing</h3>
+
+<p><strong>Key-on.</strong> Writing a word with bit 0 = 1 to ViCTRL keys voice i on: its volume is loaded
+from ENV bits 3–0, its envelope tick count is reset, and, for voices 0–2, its phase accumulator P is set
+to 0; for voice 3, L is seeded with 7FFF. Writing 1 to a voice that is already on keys it on again from
+the start. All of this happens at the moment of the write, and the next sample steps the accumulator as
+usual: the first sample after key-on is therefore computed with P = FREQ, not with 0.</p>
+
+<p><strong>Key-off.</strong> Writing a word with bit 0 = 0 keys the voice off: its volume becomes 0 at once
+and its envelope stops. The accumulator keeps running; for the noise voice Q keeps running and L keeps
+shifting, which cannot be heard, and the next key-on reseeds L. A keyed-off voice contributes 0 to the
+mix.</p>
+
+<p>Reading ViCTRL returns bit 0 = 1 while the voice is keyed on (even after a falling envelope has reached
+0) and its current volume in bits 11–8. Key-on and key-off act at the moment of the write, so reads of
+ViCTRL reflect the new state immediately, without waiting for the next sample.</p>
+
+<p><strong>Voice output.</strong> Each sample, a voice's output is</p>
+
+<pre>
+o = (2s − 15) × volume                          −225 to 225
+</pre>
+
+<p>so s = 0 and s = 15 are equal and opposite, and a silent voice (s taken as 7.5) or a voice at volume 0
+gives 0. Note that a keyed-on voice at FREQ = 0 still gives a constant, non-zero output unless its
+volume is 0.</p>
+
+<p><strong>Mixing.</strong> The four outputs are added and multiplied by the master volume,
+MASTERVOL bits 3–0 (0 silent, 15 full; reset value 0, so the console is silent until a program sets it):</p>
+
+<pre>
+mix = (o0 + o1 + o2 + o3) × MASTERVOL          −13,500 to 13,500
+</pre>
+
+<p><strong>Output scaling.</strong> The mix is exact; the output amplifier scales it so that mix / 13,500 is
+the fraction of full output, −1.0 to +1.0. When the output is recorded as signed 16-bit samples, the
+value recorded is mix × 2 (−27,000 to 27,000). There is no clipping anywhere in the chain: all four voices
+at volume 15 with MASTERVOL 15 reach exactly full output.</p>
+
+<!-- ===================================================================== -->
+<h3 id="aud-freq">6.8 Worked example: tuning notes</h3>
+
+<p>To play A4 = 440 Hz, FREQ = round(440 × 65536 / 47,940.34) = round(28,835,840 / 47,940.34) =
+round(601.49) = 601 (hex 0259). The note actually produced is 601 × 47,940.34 / 65536 = 439.64 Hz. The
+table gives FREQ for some common notes; the same value serves every tone waveform.</p>
+
+<table class="regtable" id="aud-notes">
+<caption>FREQ values for common notes (equal temperament, A4 = 440 Hz)</caption>
+<tr><th>Note</th><th>Frequency (Hz)</th><th>FREQ</th><th>FREQ (hex)</th><th>Actual (Hz)</th></tr>
+<tr data-hz="110" data-freq="150"><td>A2</td><td>110.00</td><td>150</td><td>0096</td><td>109.73</td></tr>
+<tr data-hz="261.63" data-freq="358"><td>C4</td><td>261.63</td><td>358</td><td>0166</td><td>261.88</td></tr>
+<tr data-hz="329.63" data-freq="451"><td>E4</td><td>329.63</td><td>451</td><td>01C3</td><td>329.91</td></tr>
+<tr data-hz="392" data-freq="536"><td>G4</td><td>392.00</td><td>536</td><td>0218</td><td>392.09</td></tr>
+<tr data-hz="440" data-freq="601"><td>A4</td><td>440.00</td><td>601</td><td>0259</td><td>439.64</td></tr>
+<tr data-hz="523.25" data-freq="715"><td>C5</td><td>523.25</td><td>715</td><td>02CB</td><td>523.03</td></tr>
+<tr data-hz="880" data-freq="1203"><td>A5</td><td>880.00</td><td>1203</td><td>04B3</td><td>880.01</td></tr>
+<tr data-hz="2093" data-freq="2861"><td>C7</td><td>2093.00</td><td>2861</td><td>0B2D</td><td>2092.85</td></tr>
+</table>
+
+<p>Low notes are coarser: at A2 one step of FREQ moves the pitch by about 0.7%, so Avenell recommends
+tuning bass lines by ear against the tables supplied with the development kit.</p>
+
+<pre id="aud-a4-example">
+; Play A4 on voice 0: 50% pulse, volume 12 falling one step every 4 ticks.
+        MOV R0, #15
+        ST  R0, [MASTERVOL]  ; master volume full
+        MOV R0, #601
+        ST  R0, [V0FREQ]     ; A4
+        MOV R0, #2
+        ST  R0, [V0WAVE]     ; pulse, 50% duty
+        MOV R0, #0x8C
+        ST  R0, [V0ENV]      ; period 4 (bits 7-5), falling (bit 4 = 0), start volume 12
+        MOV R0, #1
+        ST  R0, [V0CTRL]     ; key on
+</pre>
+
+<!-- ===================================================================== -->
+<h3 id="aud-registers">6.9 Audio register reference</h3>
+
+<p>Voice i (0–3) has four registers at F080 + 8 × i. All registers are 16 bits wide; bits not described
+are ignored on writing.</p>
+
+<table class="regtable" id="aud-reg-table">
+<caption>Cue registers</caption>
+<tr><th>Address</th><th>Name</th><th>Access</th><th>Description</th></tr>
+<tr><td>F080</td><td>V0FREQ</td><td>rw</td><td>Voice 0 phase increment per sample (6.2).</td></tr>
+<tr><td>F082</td><td>V0WAVE</td><td>rw</td><td>Voice 0 waveform, bits 2–0 (6.3).</td></tr>
+<tr><td>F084</td><td>V0ENV</td><td>rw</td><td>Voice 0 envelope: bits 3–0 start volume, bit 4 direction, bits 7–5 period; used at key-on (6.6).</td></tr>
+<tr><td>F086</td><td>V0CTRL</td><td>rw</td><td>Voice 0 control: write bit 0 = 1 key-on, 0 key-off; read bit 0 keyed on, bits 11–8 volume (6.7).</td></tr>
+<tr><td>F088</td><td>V1FREQ</td><td>rw</td><td>Voice 1 phase increment, as V0FREQ.</td></tr>
+<tr><td>F08A</td><td>V1WAVE</td><td>rw</td><td>Voice 1 waveform, as V0WAVE.</td></tr>
+<tr><td>F08C</td><td>V1ENV</td><td>rw</td><td>Voice 1 envelope, as V0ENV.</td></tr>
+<tr><td>F08E</td><td>V1CTRL</td><td>rw</td><td>Voice 1 control, as V0CTRL.</td></tr>
+<tr><td>F090</td><td>V2FREQ</td><td>rw</td><td>Voice 2 phase increment, as V0FREQ.</td></tr>
+<tr><td>F092</td><td>V2WAVE</td><td>rw</td><td>Voice 2 waveform, as V0WAVE.</td></tr>
+<tr><td>F094</td><td>V2ENV</td><td>rw</td><td>Voice 2 envelope, as V0ENV.</td></tr>
+<tr><td>F096</td><td>V2CTRL</td><td>rw</td><td>Voice 2 control, as V0CTRL.</td></tr>
+<tr><td>F098</td><td>V3FREQ</td><td>rw</td><td>Noise clock: added to accumulator Q each sample; L shifts on each carry (6.5).</td></tr>
+<tr><td>F09A</td><td>V3WAVE</td><td>rw</td><td>Noise mode, bit 0: 0 long (15-bit) sequence, 1 short (7-bit) sequence.</td></tr>
+<tr><td>F09C</td><td>V3ENV</td><td>rw</td><td>Noise envelope, as V0ENV.</td></tr>
+<tr><td>F09E</td><td>V3CTRL</td><td>rw</td><td>Noise control: key-on loads the volume, resets the envelope count and seeds L with 7FFF; reads as V0CTRL.</td></tr>
+<tr><td>F0A0</td><td>WAVE0</td><td>rw</td><td>Wavetable samples 0–3 (sample 0 in bits 3–0).</td></tr>
+<tr><td>F0A2</td><td>WAVE1</td><td>rw</td><td>Wavetable samples 4–7.</td></tr>
+<tr><td>F0A4</td><td>WAVE2</td><td>rw</td><td>Wavetable samples 8–11.</td></tr>
+<tr><td>F0A6</td><td>WAVE3</td><td>rw</td><td>Wavetable samples 12–15.</td></tr>
+<tr><td>F0A8</td><td>WAVE4</td><td>rw</td><td>Wavetable samples 16–19.</td></tr>
+<tr><td>F0AA</td><td>WAVE5</td><td>rw</td><td>Wavetable samples 20–23.</td></tr>
+<tr><td>F0AC</td><td>WAVE6</td><td>rw</td><td>Wavetable samples 24–27.</td></tr>
+<tr><td>F0AE</td><td>WAVE7</td><td>rw</td><td>Wavetable samples 28–31 (sample 31 in bits 15–12).</td></tr>
+<tr><td>F0B0</td><td>MASTERVOL</td><td>rw</td><td>Master volume, bits 3–0 (0 silent, 15 full). Reset value 0.</td></tr>
+</table>

@@ -1,0 +1,228 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="appendix-e">Appendix E: Implementation notes</h2>
+
+<p>This appendix is written for the engineering staff of licensed developers who want to understand
+<em>why</em> the Cyclorama behaves as it does. Nothing here changes the programming rules of the
+preceding chapters; where a note describes the inside of a chip, the chapters remain the definition
+of its behaviour. Figures for gate counts are Avenell engineering estimates in two-input-gate
+equivalents and are given for interest only.</p>
+
+<!-- ===================================================================== -->
+<h3 id="eng-heritage">E.1 From the fade engine to Barndoor</h3>
+
+<p>The light field descends from the fade engine of the Wickline 512 lighting console (March 1981), a
+small arithmetic pipeline that computes the crossfade level of 512 dimmer channels, one channel after
+another, many times a second. Barndoor applies the same idea to the television beam: instead of
+stepping through dimmer channels it steps through dots, and instead of a crossfade it computes, for
+every dot, how far that dot is from each of four lights. Because the beam moves one dot at a time,
+nothing in the light field ever needs a multiplier. Every quantity changes by at most one per dot and
+can be kept by a counter.</p>
+
+<!-- ===================================================================== -->
+<h3 id="eng-light-pipeline">E.2 One light pipeline</h3>
+
+<p>Barndoor contains four identical light pipelines, one per light, working side by side. Each produces
+one level per dot. A pipeline is built from these stages:</p>
+
+<ol>
+<li><strong>Position counters.</strong> At the dot-0 strobe an 11-bit up/down counter is loaded with the
+difference between the first column and the line copy of LiX, and it counts up by one every dot, so it
+always holds x − LX, which runs from −511 to 767. A second
+register holds y − LY; it is formed once per line, at the same dot-0 strobe that latches LiY, and is
+constant along the line, so it costs almost nothing.</li>
+<li><strong>Absolute value.</strong> Each difference passes through a conditional negator controlled by its
+sign bit, giving dx and dy (11 bits, since a light may lie up to 512 pixels off screen).</li>
+<li><strong>Shape unit.</strong> An 11-bit magnitude comparator decides which of dx and dy is larger and
+steers them into a max and a min bus. One 11-bit adder then serves all four shapes: it adds dx to dy
+(diamond), max to nothing (square), max to min shifted right one place (octagon, where the shift is only
+wiring), or dy to nothing (band). The shape bits of LiF select the adder's inputs.</li>
+<li><strong>Barrel shift.</strong> Three ranks of two-way selectors shift the distance right by 1, 2 and 4
+places under control of the three falloff bits, giving d &gt;&gt; F.</li>
+<li><strong>Clamp and subtract.</strong> A comparator tests whether d &gt;&gt; F has reached |I|; if so the
+level is 0, otherwise a 4-bit subtractor forms |I| − (d &gt;&gt; F).</li>
+<li><strong>Sign.</strong> A conditional negator applies the sign of I.</li>
+</ol>
+
+<p>Only the low three bits of each level ever leave the pipeline, because the sum is taken modulo 8. The
+five terms (AMBIENT and four levels) are added by a chain of four <strong>3-bit adders</strong> whose carry
+out of the top bit is simply not connected. That is why the shade wraps: saturating would need a wider
+adder, a comparator and a clamp for every dot, and the wrap costs nothing. A final two-way selector
+chooses FIXED instead of the sum for unlit pixels and when the light field is disabled. Each pipeline is
+four register stages deep. It is started by the dot-0 strobe, so it works only from the line copies of
+the light registers, and it delivers the line's shades while the line is being drawn, one line before the
+picture reaches the screen (E.3).</p>
+
+<figure class="figure" id="fig-eng-pipeline">
+<!--@svg:eng-pipeline-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 250" width="760" height="250" role="img" aria-label="Block diagram of one light pipeline feeding the 3-bit shade adder and colour RAM" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><defs><marker id="eng-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z"/></marker></defs><rect x="8" y="30" width="92" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="54" y="50.5" text-anchor="middle">LiX, LiY</text><text x="54" y="63.5" text-anchor="middle">line latch</text><rect x="114" y="30" width="92" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="160" y="50.5" text-anchor="middle">up/down</text><text x="160" y="63.5" text-anchor="middle">counter x − LX</text><path d="M100 53 L114 53" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><rect x="220" y="30" width="92" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="266" y="50.5" text-anchor="middle">absolute</text><text x="266" y="63.5" text-anchor="middle">value: dx, dy</text><path d="M206 53 L220 53" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><rect x="326" y="30" width="92" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="372" y="50.5" text-anchor="middle">shape unit</text><text x="372" y="63.5" text-anchor="middle">max/min, adder</text><path d="M312 53 L326 53" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><rect x="432" y="30" width="92" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="478" y="50.5" text-anchor="middle">barrel shift</text><text x="478" y="63.5" text-anchor="middle">d &gt;&gt; F</text><path d="M418 53 L432 53" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><rect x="538" y="30" width="92" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="584" y="50.5" text-anchor="middle">clamp and</text><text x="584" y="63.5" text-anchor="middle">subtract |I|</text><path d="M524 53 L538 53" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><rect x="644" y="30" width="92" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="690" y="50.5" text-anchor="middle">apply</text><text x="690" y="63.5" text-anchor="middle">sign of I</text><path d="M630 53 L644 53" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><text x="8" y="18" font-style="italic">one of four identical light pipelines, one result per dot</text><path d="M690 76 L690 148" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><text x="684" y="106" text-anchor="end">level (low 3 bits)</text><rect x="620" y="150" width="140" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="690" y="170.5" text-anchor="middle">3-bit adder, carry</text><text x="690" y="183.5" text-anchor="middle">discarded (mod 8)</text><text x="756" y="214" text-anchor="end">↑ AMBIENT and levels of lights 1–3</text><rect x="460" y="150" width="130" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="525" y="170.5" text-anchor="middle">select FIXED if unlit</text><text x="525" y="183.5" text-anchor="middle">or light field off</text><path d="M620 173 L590 173" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><rect x="260" y="150" width="170" height="46" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor"/><text x="345" y="170.5" text-anchor="middle">CRAM 512 × 12 at</text><text x="345" y="183.5" text-anchor="middle">shade × 64 + base index</text><path d="M460 173 L430 173" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><path d="M260 173 L12 173" stroke="currentColor" fill="none" marker-end="url(#eng-arrow)"/><text x="12" y="165">colour to DAC</text><text x="345" y="214" text-anchor="middle">↑ base index (6 bits) from compositing</text></svg>
+<!--/@svg-->
+<figcaption>Figure E-1. One light pipeline and the shade adder. Four pipelines feed the adder; the shade and the
+6-bit base index together address CRAM.</figcaption>
+</figure>
+
+<table class="regtable" id="eng-light-gates">
+<caption>Estimated gates in one light pipeline</caption>
+<tr><th>Stage</th><th>Gates (est.)</th></tr>
+<tr><td>Register latches for LiX, LiY, LiI, LiF (live and line copies)</td><td>290</td></tr>
+<tr><td>Up/down counters and absolute-value units</td><td>220</td></tr>
+<tr><td>Shape unit: comparator, max/min selectors, 11-bit adder</td><td>250</td></tr>
+<tr><td>Barrel shift</td><td>100</td></tr>
+<tr><td>Clamp, subtract and sign</td><td>90</td></tr>
+<tr><td>Pipeline registers</td><td>150</td></tr>
+<tr><td><strong>One pipeline</strong></td><td><strong>about 1,100</strong></td></tr>
+</table>
+
+<!-- ===================================================================== -->
+<h3 id="eng-barndoor">E.3 The rest of Barndoor</h3>
+
+<p><strong>Colour RAM</strong> is a 512 × 12 static RAM on the Barndoor die: 6,144 bits, read once per dot
+at the address shade × 64 + base index and written through the CRAMDATA port. It is the largest single
+block on the chip. A picture chip without the light field would need only its 64 base colours, a
+64 × 12 RAM of 768 bits; the eight shade planes multiply that by eight.</p>
+
+<p><strong>Line buffers.</strong> This is the line buffer of 5.8. Barndoor draws the whole of line y, every
+layer, lit and shaded, during line y, starting at dot 0, and scans the finished line out to the television
+during line y + 1. Two buffers of 256 entries are used alternately: one receives line y while the other,
+holding line y − 1, is scanned out. The picture therefore reaches the screen one line after it is drawn;
+VCOUNT, the LINE interrupt and the probe all count drawing lines, so programs never see the delay. Each
+entry holds a finished 12-bit colour: the light pipelines and the CRAM lookup work at dot rate while the
+line is drawn, from the line copies of the registers taken at its dot 0. Inside the drawing of a line,
+sprites are first evaluated and drawn into a sprite line buffer of 256 entries, each holding a 6-bit base
+index, the behind flag and the unlit flag, and the tile layers are fetched through shift registers, eight
+dots at a time; these are stages of the one line pipeline, not a second one.</p>
+
+<p><strong>The dot-0 rule.</strong> Every programmer-visible register has a live copy, written by the CPU,
+and a line copy, loaded from it by a single strobe at dot 0. The drawing hardware reads only the line
+copies. The memory ports keep their writes in a write queue; the two wait cycles on VDATA, OAMDATA and
+CRAMDATA during active display are the time the port takes to place an access in that queue. A write that
+enters the queue after dot 0 of line y is held back from every fetch made for line y, so it is first seen
+on line y + 1. The result is the simple rule given in chapter 5: a line is drawn from the state at its
+dot 0.</p>
+
+<p><strong>OAM</strong> is a 512 × 8 static RAM on the die, scanned in order by the sprite evaluator at the start of
+the line it serves, after the dot-0 strobe, so the sprite list for line y is always built from OAM as it stood at dot 0 of line y.</p>
+
+<table class="regtable" id="eng-barndoor-gates">
+<caption>Estimated Barndoor budget</caption>
+<tr><th>Block</th><th>Gates (est.)</th><th>RAM bits</th></tr>
+<tr><td>Four light pipelines</td><td>4,400</td><td>—</td></tr>
+<tr><td>Shade adder and FIXED selector</td><td>100</td><td>—</td></tr>
+<tr><td>Colour RAM, 512 × 12</td><td>(array)</td><td>6,144</td></tr>
+<tr><td>OAM, 512 × 8</td><td>(array)</td><td>4,096</td></tr>
+<tr><td>Sprite line buffers, 2 × 256 × 8</td><td>(array)</td><td>4,096</td></tr>
+<tr><td>Line buffers (5.8), 2 × 256 × 12</td><td>(array)</td><td>6,144</td></tr>
+<tr><td>Tile fetch, map addressing, scrolling, shift registers</td><td>3,000</td><td>—</td></tr>
+<tr><td>Sprite evaluation and drawing</td><td>2,500</td><td>—</td></tr>
+<tr><td>CPU port, register file, write queue, DMA</td><td>2,200</td><td>—</td></tr>
+<tr><td>Timing generator, probe latch, video output</td><td>800</td><td>—</td></tr>
+<tr><td><strong>Total</strong></td><td><strong>about 13,000</strong></td><td><strong>20,480</strong></td></tr>
+</table>
+
+<p><strong>Why Barndoor is expensive.</strong> The four per-pixel light pipelines and the eight-fold colour
+RAM account for roughly four-tenths of the die. Every light must produce a new result every dot, 5.4
+million times a second, so none of the arithmetic can be shared or done slowly; the pipelines cannot be
+replaced by a cheaper sequential unit. A large die yields fewer good chips per wafer, and Barndoor is
+the most costly part in the console. Avenell judged the light field worth that price: it is what the
+Cyclorama is.</p>
+
+<!-- ===================================================================== -->
+<h3 id="eng-cue">E.4 Cue and Tally notes</h3>
+
+<p><strong>Cue</strong> is small by comparison. The four voices share one arithmetic unit, used in turn:
+there are 448 master cycles between samples, far more than needed. The phase accumulators, the noise
+register, the envelope counters and the wavetable are ordinary registers; the multiply by volume is a
+short shift-and-add sequence performed once per voice per sample. The mix is converted to an analogue
+level by a resistor-ladder converter and filtered. Because every step is digital and exact, Cue
+sounds the same on every console.</p>
+
+<p><strong>Tally</strong> accesses memory on a 2-cycle bus rhythm, which is why every instruction time in
+the CPU chapter is even except for shifts, whose extra cycles are one per bit shifted. The multiply
+instructions take 8 extra cycles because the multiplier retires two bits of the operand per cycle.</p>
+
+<!-- ===================================================================== -->
+<h3 id="eng-annex">E.5 Preservation annex (modern)</h3>
+
+<div class="note" id="eng-annex-note">
+<p><strong>Out-of-world note.</strong> This annex is not part of the 1987 manual. It is a modern engineering
+note written for the preservation project that builds the Cyclorama for real, and speaks plainly about
+present-day parts. The Cyclorama and Avenell are fiction; the mapping below is real engineering.</p>
+</div>
+
+<h4 id="eng-annex-target">Target device</h4>
+
+<p>The whole console fits a low-cost FPGA of roughly 8,000–12,000 four-input LUTs, about 40 block RAMs of
+18 Kbit (each usable as 1K × 18 or 512 × 36, true dual-port), and one or two 18 × 18 multiplier (DSP)
+blocks. Cartridge ROM larger than a few hundred kilobytes lives in external flash or SDRAM.</p>
+
+<h4 id="eng-annex-clock">Clocking</h4>
+
+<p>Run the whole design in one clock domain at the master clock M = 945/44 MHz = 21.477272… MHz, with clock
+enables: dot every 4 M, CPU cycle every 6 M, audio sample every 448 M. A 21.477 MHz crystal oscillator
+(the common 6 × colour-subcarrier frequency) gives the exact rate; otherwise a fractional PLL from a 25,
+27 or 50 MHz reference can come within a few ppm, which is inaudible and invisible. Determinism does not
+depend on the clock's accuracy: a conforming implementation counts master cycles, and the reference
+rules (all register accesses at the instruction's start time, the dot-0 rule, DMA effects applied at the
+start of the transfer) are chosen so that hardware and the reference emulator agree bit for bit.</p>
+
+<h4 id="eng-annex-memory">Memories</h4>
+
+<table class="regtable" id="eng-annex-bram">
+<caption>Block RAM plan (18 Kbit blocks)</caption>
+<tr><th>Memory</th><th>Size</th><th>Organisation</th><th>Blocks</th></tr>
+<tr><td>VRAM</td><td>32 KiB</td><td>16K × 16, dual-port: port A CPU/DMA, port B renderer</td><td>16</td></tr>
+<tr><td>Work RAM</td><td>16 KiB</td><td>8K × 16</td><td>8</td></tr>
+<tr><td>CRAM</td><td>512 × 12</td><td>dual-port: CPU write, renderer read once per dot</td><td>1</td></tr>
+<tr><td>OAM</td><td>512 bytes</td><td>256 × 16; the evaluator scans 64 Y words in well under a line</td><td>1</td></tr>
+<tr><td>Sprite line buffers</td><td>2 × 256 × 8</td><td>one block as 512 × 9, ping-pong halves</td><td>1</td></tr>
+<tr><td>Line buffers (5.8)</td><td>2 × 256 × 12</td><td>ping-pong: one line drawn while the previous one is scanned out</td><td>1</td></tr>
+<tr><td>Scan-doubler line buffers (optional)</td><td>2 × 256 × 12</td><td>for 31 kHz or digital display output</td><td>1</td></tr>
+<tr><td>Cartridge RAM</td><td>8 KiB</td><td>4K × 16, contents saved to flash</td><td>4</td></tr>
+<tr><td>Cartridge ROM (small titles)</td><td>32–256 KiB</td><td>otherwise external flash or SDRAM</td><td>16–128</td></tr>
+</table>
+
+<p>Because a line lasts 1368 master cycles, the renderer can fetch everything for a line at the
+master-clock rate from block RAM at dot 0 and compose it into a line buffer long before it is shown. This
+makes the dot-0 rule trivial to honour: take a snapshot of the registers at dot 0 and render from the
+block RAMs immediately, stalling CPU/DMA writes on port A for the few hundred master cycles the fetch
+needs, or simply render the whole line in zero modelled time at dot 0 as the reference emulator does.</p>
+
+<h4 id="eng-annex-light">The four light pipelines</h4>
+
+<p>Each light pipeline is an 11-bit subtract/absolute, a comparator, an 11-bit adder, a 3-stage barrel
+shifter and a 4-bit clamp/subtract: about 60–90 LUTs, no DSP blocks. Four in parallel at the dot enable
+cost about 300 LUTs. Alternatively, since M is exactly four times the dot clock, a single pipeline can
+evaluate the four lights in turn, one per master cycle, and accumulate the 3-bit sum. The shade adder is
+a 3-bit accumulator whose carry is discarded. No multipliers are needed anywhere in the video path; shade
+× 64 + base index is bit concatenation.</p>
+
+<h4 id="eng-annex-cpu">CPU and audio</h4>
+
+<p>Tally's MUL and FMUL map onto one 18 × 18 DSP multiplier (or a LUT shift-and-add unit spread over the
+instruction's 8 extra cycles). Cue needs only small multiplies (a signed 5-bit step by a 4-bit volume, and
+the 11-bit sum by MASTERVOL), which fit in LUTs or can share the CPU's DSP block, since 448 master cycles
+separate samples.</p>
+
+<p>For audio output, either drive an I2S DAC or codec, or use PWM / first-order sigma-delta on a single pin
+with an RC filter. With I2S, a bit clock of M ÷ 7 gives exactly 64 bit clocks per sample at 47,940.34 Hz
+(7 × 64 = 448), so the codec runs at the console's own rate with no resampling; codecs that only accept
+48 kHz need a resampler. For PWM, a 9-bit PWM at M gives a carrier of about 42 kHz; sigma-delta at M
+is simpler and cleaner. Scale mix × 2 as signed 16-bit PCM, as the reference does.</p>
+
+<h4 id="eng-annex-video">Video output</h4>
+
+<p>Native timing is 15.70 kHz horizontal, 59.92 Hz vertical, suitable for a standard-definition RGB
+monitor through three 4-bit resistor-ladder DACs (the 12-bit colour maps one bit per resistor). For modern
+monitors, line-double to 31.4 kHz with the optional line buffers above, or place the 256 × 224 × 12-bit
+picture in external SDRAM and scale it for a digital display transmitter. Keep the internal timing exact
+in every case; only the output stage may differ.</p>
+
+<table class="regtable" id="eng-annex-summary">
+<caption>Resource summary (estimate)</caption>
+<tr><th>Subsystem</th><th>LUTs</th><th>Block RAMs</th><th>DSP</th></tr>
+<tr><td>Tally CPU</td><td>2,000–2,500</td><td>0</td><td>1</td></tr>
+<tr><td>Barndoor without light field</td><td>2,000–3,000</td><td>20 (VRAM, OAM, CRAM, line buffers)</td><td>0</td></tr>
+<tr><td>Light field (four light pipelines, adder)</td><td>300–400</td><td>0</td><td>0</td></tr>
+<tr><td>Cue audio</td><td>400–600</td><td>0</td><td>0 or shared</td></tr>
+<tr><td>Bus, work RAM, cartridge mapper, DMA, timer, input</td><td>500–800</td><td>8 + cartridge</td><td>0</td></tr>
+</table>

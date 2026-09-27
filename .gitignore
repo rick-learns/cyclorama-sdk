@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 rick-learns
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dependencies and build outputs
+node_modules
+build/
+*.tsbuildinfo
+
+# Scratch, test and tool output (WAV renders and screenshots go to .tmp/)
+.tmp/
+test-results/
+playwright-report/
+blob-report/
+coverage/
+*.log
+*.wav
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+
+# OS and editor droppings
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

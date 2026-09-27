@@ -1,0 +1,408 @@
+-- SPDX-FileCopyrightText: 2026 rick-learns
+-- SPDX-License-Identifier: Apache-2.0
+--
+-- SLICE TEST: the test cartridge that proves the whole pipeline end to end (source to ROM to replay).
+-- A tiny complete game in SCRIM: a title screen, one dark room lit by the player's lantern,
+-- three lamps to relight by touching them, a drifting spark that costs a life (three lives),
+-- GAME OVER, and a WIN screen once every lamp burns. A looping tune plays on Cue voice 0;
+-- sound effects use voice 1 (lamp chime, jingles) and voice 3 (noise, when the spark hits).
+--
+-- GAME_STATE is the word at $A000 (VAR ... AT, documented in docs/slice-gate.md):
+--   1 = TITLE, 2 = PLAY, 3 = GAME OVER, 4 = WIN.   (0 only before start-up finishes)
+-- The completion replay (replays/slice-test.replay.json) ends with GAME_STATE = 4.
+--
+-- Structure: the VBLANK interrupt only counts and acknowledges; the main loop WAITs for it and
+-- then runs one frame of logic during vertical blank. Whole-screen redraws (entering a state)
+-- blank the display while they run.
+PROGRAM SliceTest;
+HEADER title = "SLICE TEST", dev = $0001, date = $19870918, version = $0100;
+
+CONST
+  PAD_UP = 1; PAD_DOWN = 2; PAD_LEFT = 4; PAD_RIGHT = 8; PAD_START = 128;
+  ST_TITLE = 1; ST_PLAY = 2; ST_OVER = 3; ST_WIN = 4;
+  MAP = $6000;                       -- BG0 map (reset value of BG0MAP)
+  UNLIT = $8000;                     -- map entry / sprite flag: ignore the light field
+  SIZE16 = 1; HIDE = 2;              -- OAM +6
+  SHOW = 1 OR 2 OR 8 OR 16;          -- VCTRL: display, BG0, sprites, light field
+  -- tiles
+  T_FLOOR = 1; T_WALL = 2; T_PLAYER = 8; T_LAMP = 12; T_LAMP_LIT = 13; T_SPARK = 14; T_FONT = 32;
+  -- play field (pixels): the room's inside is x 8..247, y 16..215 (row 0 is the status line)
+  MIN_X = 8; MAX_X = 232; MIN_Y = 16; MAX_Y = 200;          -- player (16 x 16) top-left
+  H_MIN_X = 8; H_MAX_X = 240; H_MIN_Y = 16; H_MAX_Y = 208;  -- spark (8 x 8) top-left
+  START_X = 120; START_Y = 112;
+  SPEED = 2;
+  LIVES = 3; LAMPS = 3;
+  SAFE_FRAMES = 90;                  -- invulnerable after a hit (the player blinks)
+
+-- ------------------------------------------------------------------ art
+-- Pixel art and the 5 x 7 font live in slice-test.art; the kit converts them to Barndoor's
+-- planar tiles at build time (ASSET, docs/scrim-spec.md §10) and start-up copies them to VRAM.
+ASSET "slice-test.art";
+EXTERN DATA FLOOR, WALL, LAMP, LAMP_LIT, SPARK: ARRAY [24] OF BYTE;   -- one tile each
+            PLAYER: ARRAY [96] OF BYTE;                               -- 16 x 16: TL, TR, BL, BR
+            FONT: ARRAY OF BYTE;                                      -- one tile per fontChars entry
+EXTERN CONST FONT_TILES: WORD;
+
+-- The characters of the font's tiles, in order.
+DATA fontChars: ARRAY OF BYTE = "ACEGILMNOPRSTUVWY0123/";
+
+DATA sTitle: ARRAY OF BYTE = "SLICE TEST";
+DATA sPress: ARRAY OF BYTE = "PRESS START";
+DATA sLives: ARRAY OF BYTE = "LIVES";
+DATA sLamps: ARRAY OF BYTE = "LAMPS";
+DATA sOver: ARRAY OF BYTE = "GAME OVER";
+DATA sAllLit: ARRAY OF BYTE = "ALL LAMPS LIT";
+DATA sWin: ARRAY OF BYTE = "YOU WIN";
+
+-- Base colours. BG palette 0: backdrop, floor, floor fleck, brick, mortar, text.
+-- Sprite palettes 0-2 (CRAM 32-55): lamplighter, lamp, spark.
+DATA colours: ARRAY [64] OF WORD = (
+  $000, $864, $975, $A54, $532, $FEB, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,
+  0, $A63, $FC9, $FE4, $322, 0, 0, 0,
+  0, $777, $334, $FC3, $FFB, 0, 0, 0,
+  0, $F40, $FA0, $FFA, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0);
+
+-- Lamp positions (8 x 8 sprites, top-left).
+DATA lampX: ARRAY [3] OF WORD = (32, 216, 124);
+DATA lampY: ARRAY [3] OF WORD = (40, 40, 192);
+
+-- ------------------------------------------------------------------ sound data
+-- Cue FREQ = round(Hz x 65536 / 47940.34). Pairs of (FREQ, frames); FREQ 0 is a rest.
+CONST C4 = 358; D4 = 401; E4 = 451; F4 = 477; G4 = 536; A4 = 601; B4 = 675;
+      C5 = 715; D5 = 803; E5 = 901; G5 = 1072; C6 = 1430; E6 = 1802; G6 = 2144;
+DATA tune: ARRAY OF WORD = (
+  E4, 12, G4, 12, C5, 12, G4, 12,   A4, 12, G4, 12, E4, 24,
+  F4, 12, A4, 12, D5, 12, A4, 12,   G4, 12, E4, 12, D4, 24,
+  E4, 12, G4, 12, C5, 12, E5, 12,   D5, 12, C5, 12, A4, 12, G4, 12,
+  F4, 12, E4, 12, D4, 12, B4, 12,   C5, 36, 0, 12);
+-- Effects on voice 1: (FREQ, frames) ... terminated by (0, 0).
+DATA sfx: ARRAY OF WORD = (
+  C6, 4, E6, 4, G6, 8, 0, 0,                -- 0: lamp relit
+  G4, 10, E4, 10, C4, 30, 0, 0,             -- 8: game over
+  C5, 6, E5, 6, G5, 6, C6, 24, 0, 0);       -- 16: win
+CONST SFX_LAMP = 0; SFX_OVER = 8; SFX_WIN = 16;
+
+-- ------------------------------------------------------------------ state
+TYPE PB = POINTER TO BYTE; PW = POINTER TO WORD;
+
+VAR GAME_STATE: WORD AT $A000;     -- the documented win/lose marker (see top of file)
+
+VAR ticks: WORD;                   -- VBLANKs seen (counted by the interrupt)
+    pad, prev, pressed: WORD;
+    px, py: WORD;                  -- player top-left
+    hx, hy: WORD;                  -- spark top-left
+    hdx, hdy: INT;
+    lives, lampsLit, safe: WORD;
+    lit: ARRAY [3] OF BYTE;
+    tunePos, tuneLeft: WORD;
+    sfxPos, sfxLeft: WORD;
+    buf: ARRAY [24] OF BYTE;       -- tile 0 (transparent), for VRAM_COPY
+
+-- ------------------------------------------------------------------ graphics set-up
+-- Eight shade planes, each a darker copy of the base colours (brightness (shade + 1) / 8).
+PROC loadPalette;
+VAR shade, c, col: WORD;
+BEGIN
+  CRAMADDR := 0;
+  FOR shade := 1 TO 8 DO
+    FOR c := 0 TO 63 DO
+      col := colours[c];
+      CRAMDATA := (((col SHR 8) AND 15) * shade SHR 3) SHL 8
+               OR (((col SHR 4) AND 15) * shade SHR 3) SHL 4
+               OR ((col AND 15) * shade SHR 3)
+    END
+  END
+END;
+
+-- Copy the converted tiles to VRAM (DMA, 24 bytes = 12 words a tile).
+PROC loadTiles;
+BEGIN
+  MEMSET(@buf, 0, 24);
+  VRAM_COPY(0, @buf, 12);                       -- tile 0: transparent
+  VRAM_COPY(T_FLOOR * 24, @FLOOR, 12);
+  VRAM_COPY(T_WALL * 24, @WALL, 12);
+  VRAM_COPY(T_LAMP * 24, @LAMP, 12);
+  VRAM_COPY(T_LAMP_LIT * 24, @LAMP_LIT, 12);
+  VRAM_COPY(T_SPARK * 24, @SPARK, 12);
+  VRAM_COPY(T_PLAYER * 24, @PLAYER, 4 * 12);   -- 16 x 16: top-left, top-right, bottom-left, bottom-right
+  VRAM_COPY(T_FONT * 24, @FONT[0], FONT_TILES * 12)
+END;
+
+-- ------------------------------------------------------------------ screen helpers
+FUNC glyph(c: WORD): WORD;
+VAR i: WORD;
+BEGIN
+  IF (c = 0) OR (c = ' ') THEN RETURN 0 END;
+  FOR i := 0 TO LEN(fontChars) - 1 DO
+    IF fontChars[i] = c THEN RETURN T_FONT + i END
+  END;
+  RETURN 0
+END;
+
+PROC put(col, row, entry: WORD);
+BEGIN
+  VADDR := MAP + (row * 64 + col) * 2;
+  VDATA := entry
+END;
+
+-- Text is unlit: it shows at the FIXED shade whatever the lights do.
+PROC text(col, row: WORD; s: PB; n: WORD);
+VAR i: WORD; p: PB;
+BEGIN
+  VADDR := MAP + (row * 64 + col) * 2;
+  FOR i := 1 TO n DO
+    p := PB(WORD(s) + i - 1);
+    VDATA := glyph(p^) OR UNLIT
+  END
+END;
+
+PROC digit(col, row, v: WORD);
+BEGIN
+  put(col, row, glyph('0' + v) OR UNLIT)
+END;
+
+PROC clearMap;
+VAR i: WORD;
+BEGIN
+  VADDR := MAP;
+  FOR i := 1 TO 2048 DO VDATA := 0 END
+END;
+
+PROC drawRoom;
+VAR row, col, t: WORD;
+BEGIN
+  clearMap;
+  FOR row := 1 TO 27 DO
+    VADDR := MAP + row * 128;
+    FOR col := 0 TO 31 DO
+      IF (row = 1) OR (row = 27) OR (col = 0) OR (col = 31) THEN t := T_WALL ELSE t := T_FLOOR END;
+      VDATA := t
+    END
+  END
+END;
+
+PROC drawHud;
+BEGIN
+  text(1, 0, @sLives[0], LEN(sLives));
+  digit(7, 0, lives);
+  text(21, 0, @sLamps[0], LEN(sLamps));
+  digit(27, 0, lampsLit);
+  put(28, 0, glyph('/') OR UNLIT);
+  digit(29, 0, LAMPS)
+END;
+
+PROC sprite(i, x, y, tile, attr: WORD);
+BEGIN
+  OAMADDR := i * 8;
+  OAMDATA := y; OAMDATA := x; OAMDATA := tile; OAMDATA := attr
+END;
+
+PROC hideSprites;
+VAR i: WORD;
+BEGIN
+  FOR i := 0 TO 4 DO OAMADDR := i * 8 + 6; OAMDATA := HIDE END
+END;
+
+-- Light i: position (centre), intensity, falloff/shape.
+PROC light(i, x, y, inten, f: WORD);
+VAR p: PW;
+BEGIN
+  p := PW($F030 + i * 8); p^ := x;
+  p := PW($F032 + i * 8); p^ := y;
+  p := PW($F034 + i * 8); p^ := inten;
+  p := PW($F036 + i * 8); p^ := f
+END;
+
+PROC lightsOff;
+VAR i: WORD;
+BEGIN
+  FOR i := 0 TO 3 DO light(i, 0, 0, 0, 0) END
+END;
+
+-- ------------------------------------------------------------------ sound
+PROC musicTick;
+BEGIN
+  IF tuneLeft = 0 THEN
+    IF tunePos >= LEN(tune) THEN tunePos := 0 END;
+    IF tune[tunePos] <> 0 THEN V0FREQ := tune[tunePos]; V0CTRL := 1 END;
+    tuneLeft := tune[tunePos + 1];
+    tunePos := tunePos + 2
+  END;
+  tuneLeft := tuneLeft - 1
+END;
+
+PROC playSfx(start: WORD);
+BEGIN
+  sfxPos := start; sfxLeft := 0
+END;
+
+PROC sfxTick;
+BEGIN
+  IF sfxPos = $FFFF THEN RETURN END;
+  IF sfxLeft = 0 THEN
+    IF sfx[sfxPos + 1] = 0 THEN sfxPos := $FFFF; RETURN END;
+    V1FREQ := sfx[sfxPos]; V1CTRL := 1;
+    sfxLeft := sfx[sfxPos + 1];
+    sfxPos := sfxPos + 2
+  END;
+  sfxLeft := sfxLeft - 1
+END;
+
+PROC noiseHit;
+BEGIN
+  V3FREQ := $3000; V3CTRL := 1
+END;
+
+-- ------------------------------------------------------------------ states
+PROC displayOff; BEGIN VCTRL := 0 END;
+PROC displayOn; BEGIN VCTRL := SHOW END;
+
+PROC enterTitle;
+BEGIN
+  displayOff;
+  clearMap;
+  hideSprites;
+  lightsOff;
+  text(11, 10, @sTitle[0], LEN(sTitle));
+  text(10, 16, @sPress[0], LEN(sPress));
+  GAME_STATE := ST_TITLE;
+  displayOn
+END;
+
+PROC enterEnd(state: WORD);
+BEGIN
+  displayOff;
+  clearMap;
+  hideSprites;
+  lightsOff;
+  IF state = ST_WIN THEN
+    text(9, 9, @sAllLit[0], LEN(sAllLit));
+    text(12, 12, @sWin[0], LEN(sWin));
+    playSfx(SFX_WIN)
+  ELSE
+    text(11, 11, @sOver[0], LEN(sOver));
+    playSfx(SFX_OVER)
+  END;
+  text(10, 18, @sPress[0], LEN(sPress));
+  GAME_STATE := state;
+  displayOn
+END;
+
+PROC startGame;
+VAR i: WORD;
+BEGIN
+  displayOff;
+  lives := LIVES; lampsLit := 0; safe := 0;
+  FOR i := 0 TO 2 DO lit[i] := 0 END;
+  px := START_X; py := START_Y;
+  hx := 40; hy := 120; hdx := 1; hdy := 1;
+  drawRoom;
+  drawHud;
+  lightsOff;
+  light(0, px + 8, py + 8, 4, $24);             -- the lantern: intensity 4, falloff 4, octagon
+  GAME_STATE := ST_PLAY;
+  displayOn
+END;
+
+FUNC overlap(ax, ay, aw, ah, bx, by, bw, bh: WORD): BOOL;
+BEGIN
+  RETURN (ax < bx + bw) AND (bx < ax + aw) AND (ay < by + bh) AND (by < ay + ah)
+END;
+
+PROC movePlayer;
+BEGIN
+  IF (pad AND PAD_LEFT) <> 0 THEN IF px >= MIN_X + SPEED THEN px := px - SPEED ELSE px := MIN_X END END;
+  IF (pad AND PAD_RIGHT) <> 0 THEN IF px + SPEED <= MAX_X THEN px := px + SPEED ELSE px := MAX_X END END;
+  IF (pad AND PAD_UP) <> 0 THEN IF py >= MIN_Y + SPEED THEN py := py - SPEED ELSE py := MIN_Y END END;
+  IF (pad AND PAD_DOWN) <> 0 THEN IF py + SPEED <= MAX_Y THEN py := py + SPEED ELSE py := MAX_Y END END
+END;
+
+PROC moveSpark;
+BEGIN
+  hx := WORD(INT(hx) + hdx);
+  hy := WORD(INT(hy) + hdy);
+  IF hx <= H_MIN_X THEN hx := H_MIN_X; hdx := 1 ELSIF hx >= H_MAX_X THEN hx := H_MAX_X; hdx := -1 END;
+  IF hy <= H_MIN_Y THEN hy := H_MIN_Y; hdy := 1 ELSIF hy >= H_MAX_Y THEN hy := H_MAX_Y; hdy := -1 END
+END;
+
+PROC playFrame;
+VAR i, attr: WORD;
+BEGIN
+  movePlayer;
+  moveSpark;
+  IF safe > 0 THEN safe := safe - 1
+  ELSIF overlap(px + 3, py + 2, 10, 13, hx + 1, hy + 1, 6, 6) THEN
+    lives := lives - 1;
+    noiseHit;
+    digit(7, 0, lives);
+    IF lives = 0 THEN enterEnd(ST_OVER); RETURN END;
+    px := START_X; py := START_Y; safe := SAFE_FRAMES
+  END;
+  FOR i := 0 TO 2 DO
+    IF (lit[i] = 0) AND overlap(px, py, 16, 16, lampX[i], lampY[i], 8, 8) THEN
+      lit[i] := 1;
+      lampsLit := lampsLit + 1;
+      digit(27, 0, lampsLit);
+      light(i + 1, lampX[i] + 4, lampY[i] + 4, 2, $24);
+      playSfx(SFX_LAMP)
+    END
+  END;
+  -- sprites: 0 player (blinks while safe), 1 spark (flickers by mirroring), 2-4 lamps
+  IF (safe AND 4) <> 0 THEN attr := SIZE16 OR HIDE ELSE attr := SIZE16 END;
+  sprite(0, px, py, T_PLAYER, attr);
+  IF (ticks AND 8) <> 0 THEN attr := $1000 ELSE attr := 0 END;
+  sprite(1, hx, hy, T_SPARK OR (2 SHL 10) OR UNLIT OR attr, 0);
+  FOR i := 0 TO 2 DO
+    IF lit[i] <> 0 THEN sprite(i + 2, lampX[i], lampY[i], T_LAMP_LIT OR (1 SHL 10) OR UNLIT, 0)
+    ELSE sprite(i + 2, lampX[i], lampY[i], T_LAMP OR (1 SHL 10), 0) END
+  END;
+  light(0, px + 8, py + 8, 4, $24);
+  IF lampsLit = LAMPS THEN enterEnd(ST_WIN) END
+END;
+
+PROC frame;
+BEGIN
+  pad := PAD1;
+  pressed := pad AND NOT prev;
+  prev := pad;
+  CASE GAME_STATE OF
+    ST_TITLE: IF (pressed AND PAD_START) <> 0 THEN startGame END;
+    ST_PLAY: playFrame;
+    ST_OVER, ST_WIN: IF (pressed AND PAD_START) <> 0 THEN enterTitle END
+  END;
+  musicTick;
+  sfxTick                               -- after the logic: an effect starts on the frame it is triggered
+END;
+
+INTERRUPT PROC onVblank;
+BEGIN
+  ticks := ticks + 1;
+  IF_PORT := 1
+END;
+
+VECTOR VBLANK := onVblank;
+
+BEGIN
+  GAME_STATE := 0;
+  sfxPos := $FFFF;
+  loadPalette;
+  loadTiles;
+  AMBIENT := 1;
+  MASTERVOL := 12;
+  V0WAVE := 4;                          -- triangle: the tune
+  V0ENV := 10 OR (3 SHL 5);             -- volume 10, falling every 3 ticks
+  V1WAVE := 1;                          -- pulse 25%: effects
+  V1ENV := 12 OR (1 SHL 5);
+  V3WAVE := 0;                          -- long noise: the spark's hit
+  V3ENV := 14 OR (1 SHL 5);
+  enterTitle;
+  IF_PORT := 1;
+  IE := 1;
+  ASM EI END;
+  WHILE TRUE DO
+    WAIT;
+    frame
+  END
+END.

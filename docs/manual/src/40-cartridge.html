@@ -1,0 +1,80 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="cartridge">4 Cartridges</h2>
+
+<p>A Cyclorama cartridge carries a ROM of one or more 16 KiB banks, a bank register and, on some boards, battery-backed RAM. The same bank-switching scheme serves every cartridge from the smallest to the largest.</p>
+
+<h3 id="cart-banks">ROM banks and the BANK register</h3>
+<p>The ROM is divided into 16 KiB banks numbered from 0. The processor sees two of them at a time:</p>
+<table class="ruled">
+<thead><tr><th>Processor address</th><th>ROM contents</th></tr></thead>
+<tbody>
+<tr><td><code>0000–3FFF</code></td><td>Bank 0, always. Vectors, header, interrupt handlers and every routine that must be reachable from any bank live here.</td></tr>
+<tr><td><code>4000–7FFF</code></td><td>The <dfn>window</dfn>: the bank selected by BANK. Processor address 4000 + x reads ROM byte BANK × 4000 + x.</td></tr>
+</tbody>
+</table>
+<p><code>BANK</code> (E000, R/W) holds the bank number in bits 7–0; bits 15–8 are ignored and read 0. It is 1 after reset. The number of banks is the ROM image length ÷ 16 KiB; the header's size byte (0015) is for information only and is never examined by the console. The window shows bank BANK mod the number of banks: on an 8-bank cartridge, BANK = 9 selects bank 1. BANK = 0 is legal and shows bank 0 in the window as well. Up to 256 banks (4 MiB) can be addressed.</p>
+<p>A write to BANK takes effect for every access after the writing instruction. Code running in the window must not change BANK (the next instruction would be fetched from the new bank); switch banks from bank 0.</p>
+
+<h3 id="cart-image">ROM images</h3>
+<p>A ROM image is the cartridge ROM as a byte array: bank n occupies image offsets n × 4000 to n × 4000 + 3FFF. An image is a whole, non-zero number of 16 KiB banks. Retail cartridges are 32 KiB or larger and a power of two in size (2, 4, 8 … 256 banks), as listed below. Avenell's development and test boards may also carry a single 16 KiB bank: such an image has only bank 0, which then also appears in the window whatever BANK holds. The window rule of <a class="xref" href="#cart-banks"></a> applies to any number of banks. Unused bytes are conventionally FF, as written by CYASM.</p>
+
+<h3 id="cart-generations">Standard and Deep cartridges</h3>
+<table class="ruled">
+<thead><tr><th>Board</th><th>Available from</th><th>ROM</th><th>Banks</th><th>Cartridge RAM</th><th>Header byte 0017</th></tr></thead>
+<tbody>
+<tr><td>Standard cartridge</td><td>September 18, 1987</td><td>32 KiB to 256 KiB</td><td>2–16</td><td>none</td><td>0</td></tr>
+<tr><td>Deep cartridge (change notice 2)</td><td>October 1990</td><td>512 KiB to 1 MiB</td><td>32–64</td><td>none, or 8 KiB battery-backed</td><td>1</td></tr>
+</tbody>
+</table>
+<p>Deep cartridges are larger boards on the same bus. They use exactly the same BANK register, window and header as Standard cartridges; software written for a Standard cartridge runs unchanged from a Deep board. The only cartridge RAM offered is the optional 8 KiB battery-backed RAM on Deep boards.</p>
+
+<h3 id="cart-header">The cartridge header</h3>
+<p>Bytes 0010–003F of bank 0 hold the header. Multi-byte numeric fields are little-endian, like all Tally data.</p>
+<table class="ruled">
+<thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Contents</th></tr></thead>
+<tbody>
+<tr><td><code>0010</code></td><td>4</td><td>Magic</td><td>ASCII <code>CYCL</code> (43 59 43 4C). Checked by the console at reset (<a class="xref" href="#sys-lockout"></a>).</td></tr>
+<tr><td><code>0014</code></td><td>1</td><td>Header version</td><td>1.</td></tr>
+<tr><td><code>0015</code></td><td>1</td><td>ROM size</td><td>Number of 16 KiB banks − 1: 0 = 16 KiB (development and test boards only), 1 = 32 KiB, 3 = 64 KiB … 255 = 4 MiB. For information; the console takes the bank count from the ROM itself.</td></tr>
+<tr><td><code>0016</code></td><td>1</td><td>Cartridge RAM</td><td>0 none; 1 = 8 KiB battery-backed. RAM is fitted exactly when this byte is 1 (<a class="xref" href="#cart-ram"></a>).</td></tr>
+<tr><td><code>0017</code></td><td>1</td><td>Generation</td><td>0 Standard; 1 Deep.</td></tr>
+<tr><td><code>0018</code></td><td>24</td><td>Title</td><td>Printable ASCII (20–7E), padded with spaces (20).</td></tr>
+<tr><td><code>0030</code></td><td>2</td><td>Developer code</td><td>16-bit code assigned by Avenell to the licensee.</td></tr>
+<tr><td><code>0032</code></td><td>4</td><td>Release date</td><td>BCD YYYYMMDD as a 32-bit little-endian value: 1987-09-18 is the value 19870918, stored as the bytes 18 09 87 19.</td></tr>
+<tr><td><code>0036</code></td><td>2</td><td>Version</td><td>BCD major.minor as a 16-bit value: version 1.00 is 0100, stored as 00 01.</td></tr>
+<tr><td><code>0038</code></td><td>2</td><td>Checksum</td><td>See below.</td></tr>
+<tr><td><code>003A</code></td><td>6</td><td>Reserved</td><td>0.</td></tr>
+</tbody>
+</table>
+<p><strong>Checksum.</strong> The checksum is the 16-bit sum, modulo 65536, of every little-endian word of the whole ROM image, all banks included, with the checksum field itself counted as 0:</p>
+<pre>sum ← 0
+for a ← 0 to size − 2 step 2:
+    w ← image[a] + image[a + 1] × 256
+    if a = 0038: w ← 0
+    sum ← (sum + w) mod 65536
+image[0038] ← sum mod 256;  image[0039] ← sum div 256</pre>
+<p>The console does not verify the checksum; Avenell's cartridge approval process and the development tools do. CYASM's <code>.header</code> directive computes the size and checksum fields (<a class="xref" href="#asm-directives"></a>).</p>
+<p>For example, a 32 KiB Standard cartridge without RAM, titled EXAMPLE, version 1.00, begins its header with the bytes <code>43 59 43 4C 01 01 00 00</code> followed by <code>45 58 41 4D 50 4C 45</code> and seventeen <code>20</code> bytes of title padding.</p>
+
+<h3 id="cart-ram">Cartridge RAM</h3>
+<p>Cartridge RAM is fitted exactly when header byte 0016 = 1, whatever the generation byte 0017 says: Deep boards are simply the ones that usually carry it. A cartridge with RAM maps 8 KiB of battery-backed static RAM at C000–DFFF. Reads work at any time. Writes are stored only while bit 0 of <code>RAMCTL</code> (E002) is 1; RAMCTL is 0 after reset, and its other bits read 0. On a cartridge without RAM the whole range reads 0 and RAMCTL has no effect. Byte and word access work as for work RAM.</p>
+<p>The battery keeps the contents while the console is off and across reset. Avenell recommends:</p>
+<ul>
+<li>Keep RAMCTL = 0 except while writing a save, so that a program fault or a power-off cannot overwrite saved data.</li>
+<li>Write a save as a complete record with its own checksum, and keep two copies, alternating between them, so that a save interrupted by power-off leaves the previous copy intact.</li>
+<li>On a first power-on, and whenever the checksums fail, initialise the RAM: its contents in a new cartridge are undefined.</li>
+</ul>
+<p>The reference model starts cartridge RAM at zero for a new cartridge and, since the RAM is part of the machine state it records, preserves its contents exactly from one session to the next, as the battery would.</p>
+
+<h3 id="cart-design">Designing for banked ROM</h3>
+<p>Bank 0 is the only ROM a program can always reach. Plan it first:</p>
+<ul>
+<li><strong>Bank 0 holds</strong> the vectors, the header, the reset routine, every interrupt handler, the main loop, bank-switching routines and any routine called from more than one bank.</li>
+<li><strong>The window holds</strong> level data, graphics and music, and code that is called only through a trampoline.</li>
+<li><strong>Interrupt handlers</strong> run with whatever bank the interrupted program selected. A handler that needs data in another bank must save BANK, switch, and restore BANK before RTI.</li>
+<li><strong>DMA and data copies</strong> from the window read the bank selected at the time; select it before starting the transfer.</li>
+</ul>
+<h4 id="cart-trampoline">Far calls through a fixed-bank trampoline</h4>
+<p>A routine in the window cannot simply CALL a routine in another bank: the window would change under the caller's feet, and the return would land in the wrong bank. Instead, the caller asks a small routine in bank 0, the <dfn>trampoline</dfn>, to make the call. The trampoline saves the current bank on the stack, selects the target bank, calls the target, then restores the caller's bank before returning to it. Because the trampoline itself is in bank 0 it is unaffected by the switch. <a class="xref" href="#ex-far-call"></a> gives a complete trampoline that passes R0–R5 through unchanged in both directions and costs 48 cycles more than a direct CALL, not counting the loading of R6 and R7.</p>
+<p>For data, a similar routine in bank 0 can copy a block from a given bank into work RAM, or start a DMA from it, and restore BANK afterwards.</p>

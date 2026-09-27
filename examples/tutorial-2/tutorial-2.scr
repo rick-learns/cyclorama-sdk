@@ -1,0 +1,162 @@
+-- SPDX-FileCopyrightText: 2026 rick-learns
+-- SPDX-License-Identifier: Apache-2.0
+--
+-- Tutorial 2: five gems in a dark room (docs/guide/tutorial-2-scrim.md).
+-- The player carries the only light; the gems show only inside it. Touch all five to win.
+-- gstate, the word at 8000 (the first VAR): 1 = PLAY, 2 = WON.
+PROGRAM Tutorial2;
+HEADER title = "TUTORIAL 2", dev = $0000, date = $19870918, version = $0100;
+
+CONST
+  PAD_UP = 1; PAD_DOWN = 2; PAD_LEFT = 4; PAD_RIGHT = 8;
+  PLAY = 1; WON = 2;                     -- the values of gstate
+  SPEED = 2;                             -- pixels a frame
+  MAX_X = 240; MAX_Y = 208;              -- 256 - 16 and 224 - 16: the player stays on screen
+  GEMS = 5;
+  MAP = $6000;                           -- BG0's map (the reset value of BG0MAP)
+  HUD = MAP + (64 + 12) * 2;             -- map row 1, column 12: the first gem icon
+  UNLIT = $8000;                         -- map entry or sprite flag: ignore the light field
+  SIZE16 = 1; HIDE = 2;                  -- OAM word +6
+  GEM_PALETTE = 1 SHL 10;                -- OAM word +4: sprite palette 1
+  T_FLOOR = 1; T_SLOT = 2; T_ICON = 3; T_PLAYER = 4; T_GEM = 8;   -- tile numbers
+
+VAR gstate: WORD;                        -- the first VAR, so it is at 8000
+    got: WORD;                           -- gems collected, 0-5
+    px, py: WORD;                        -- the player's top-left corner
+    taken: ARRAY [5] OF BYTE;            -- 1 once gem i is collected
+    SND_RAM: ARRAY [136] OF WORD;        -- the Cue Sound Driver's 272 bytes
+
+DATA gemX: ARRAY [5] OF WORD = (32, 208, 48, 192, 112);
+DATA gemY: ARRAY [5] OF WORD = (40, 56, 176, 168, 192);
+
+ASSET "tutorial-2.art";                  -- tiles and colours
+ASSET "tutorial-2.song";                 -- SONG_theme, SONG_win, SFX_gem
+LINK "../../roms/lib/cuesound.inc";      -- the Cue Sound Driver
+EXTERN DATA FLOOR, SLOT, ICON: ARRAY [24] OF BYTE;   -- one 8 x 8 tile each
+            PLAYER, GEM: ARRAY [96] OF BYTE;         -- 16 x 16: four tiles each
+            ROOM_COLOURS, PLAYER_COLOURS, GEM_COLOURS: ARRAY [8] OF WORD;
+EXTERN CONST SONG_theme, SONG_win, SFX_gem: WORD;
+EXTERN PROC SndInit;
+EXTERN PROC SndPlaySong(song: WORD);
+EXTERN PROC SndSfx(sfx: WORD);
+EXTERN PROC SndTick;
+
+-- Colour col ($RGB) at brightness s/7, rounded (manual 5.9.5): 0 is black, 7 the colour as drawn.
+FUNC dim(col, s: WORD): WORD;
+BEGIN
+  RETURN (((col SHR 8) AND 15) * s + 3) / 7 SHL 8
+      OR (((col SHR 4) AND 15) * s + 3) / 7 SHL 4
+      OR ((col AND 15) * s + 3) / 7
+END;
+
+-- Shade plane s (CRAM s x 64 onwards) holds each colour at brightness s/7: BG palette 0,
+-- and sprite palettes 0 and 1 (CRAM palettes 4 and 5).
+PROC loadColours;
+VAR s, c: WORD;
+BEGIN
+  FOR s := 0 TO 7 DO
+    FOR c := 0 TO 7 DO
+      CRAMADDR := s * 64 + c;       CRAMDATA := dim(ROOM_COLOURS[c], s);
+      CRAMADDR := s * 64 + 32 + c;  CRAMDATA := dim(PLAYER_COLOURS[c], s);
+      CRAMADDR := s * 64 + 40 + c;  CRAMDATA := dim(GEM_COLOURS[c], s)
+    END
+  END
+END;
+
+PROC loadTiles;                          -- tile n goes to VRAM n x 24; 12 words a tile
+BEGIN
+  VRAM_COPY(T_FLOOR * 24, @FLOOR, 12);
+  VRAM_COPY(T_SLOT * 24, @SLOT, 12);
+  VRAM_COPY(T_ICON * 24, @ICON, 12);
+  VRAM_COPY(T_PLAYER * 24, @PLAYER, 48);
+  VRAM_COPY(T_GEM * 24, @GEM, 48)
+END;
+
+PROC drawRoom;                           -- floor everywhere, then five empty slots
+VAR i: WORD;
+BEGIN
+  VADDR := MAP;
+  FOR i := 1 TO 64 * 32 DO VDATA := T_FLOOR END;
+  VADDR := HUD;
+  FOR i := 1 TO GEMS DO VDATA := T_SLOT OR UNLIT; VDATA := T_FLOOR END
+END;
+
+PROC drawSprites;
+VAR i: WORD;
+BEGIN
+  OAMADDR := 0;                          -- sprite 0: the player, unlit, so always seen
+  OAMDATA := py; OAMDATA := px; OAMDATA := T_PLAYER OR UNLIT; OAMDATA := SIZE16;
+  FOR i := 0 TO GEMS - 1 DO              -- sprites 1-5: the gems, lit, so dark outside the light
+    OAMDATA := gemY[i]; OAMDATA := gemX[i]; OAMDATA := T_GEM OR GEM_PALETTE;
+    IF taken[i] = 0 THEN OAMDATA := SIZE16 ELSE OAMDATA := HIDE END
+  END;
+  L0X := px + 8;                         -- light 0 at the player's centre
+  L0Y := py + 8
+END;
+
+PROC move(pad: WORD);
+BEGIN
+  IF ((pad AND PAD_LEFT) <> 0) AND (px > 0) THEN px := px - SPEED END;
+  IF ((pad AND PAD_RIGHT) <> 0) AND (px < MAX_X) THEN px := px + SPEED END;
+  IF ((pad AND PAD_UP) <> 0) AND (py > 0) THEN py := py - SPEED END;
+  IF ((pad AND PAD_DOWN) <> 0) AND (py < MAX_Y) THEN py := py + SPEED END
+END;
+
+-- The player touches gem i when their 16 x 16 boxes overlap by more than 4 pixels each way.
+FUNC touching(i: WORD): BOOL;
+BEGIN
+  RETURN (px < gemX[i] + 12) AND (gemX[i] < px + 12) AND (py < gemY[i] + 12) AND (gemY[i] < py + 12)
+END;
+
+PROC win;
+BEGIN
+  gstate := WON;
+  SndPlaySong(SONG_win);                 -- the jingle replaces the theme
+  L0F := $25                             -- octagon, falloff 5: the light fills the room
+END;
+
+PROC collect;
+VAR i: WORD;
+BEGIN
+  FOR i := 0 TO GEMS - 1 DO
+    IF (taken[i] = 0) AND touching(i) THEN
+      taken[i] := 1;
+      VADDR := HUD + got * 4;            -- the next slot (slots are two map entries apart)
+      VDATA := T_ICON OR UNLIT;
+      got := got + 1;
+      SndSfx(SFX_gem);
+      IF got = GEMS THEN win END
+    END
+  END
+END;
+
+INTERRUPT PROC onVblank;
+BEGIN
+  SndTick;                               -- the driver plays one frame of music and effects
+  IF_PORT := 1                           -- acknowledge VBLANK
+END;
+
+VECTOR VBLANK := onVblank;
+
+BEGIN
+  gstate := PLAY;
+  px := 120; py := 104;
+  loadColours;
+  loadTiles;
+  drawRoom;
+  drawSprites;
+  AMBIENT := 0;                          -- no light but the player's
+  L0I := 7;                              -- light 0: intensity 7,
+  L0F := $23;                            -- octagon (shape 2, bits 5-4), falloff 3
+  SndInit;
+  SndPlaySong(SONG_theme);
+  VCTRL := 1 OR 2 OR 8 OR 16;            -- display, BG0, sprites, light field
+  IF_PORT := 1;                          -- forget a VBLANK that is already pending
+  IE := 1;                               -- enable the VBLANK interrupt
+  ASM EI END;
+  WHILE TRUE DO
+    WAIT;                                -- sleep until VBLANK has run onVblank
+    IF gstate = PLAY THEN move(PAD1); collect END;
+    drawSprites
+  END
+END.

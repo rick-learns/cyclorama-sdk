@@ -1,0 +1,8 @@
+{
+  "note": "Every picture in this folder is a real frame of an SDK program on the reference emulator, made with `npm run frame -- <source> <frames> <file> --pad <bits> --from <frame> --scale <n>`; tests/sdk-docs.test.ts re-renders each one and requires the same PNG bytes.",
+  "images": {
+    "lantern-test.png": { "source": "roms/lantern-test/lantern-test.asm", "frames": 72, "pad": 24, "from": 40, "scale": 2 },
+    "tutorial-1-step1.png": { "source": "examples/tutorial-1/step1.asm", "frames": 10, "pad": 0, "from": 0, "scale": 2 },
+    "tutorial-2.png": { "source": "examples/tutorial-2/tutorial-2.scr", "frames": 40, "pad": 5, "from": 0, "scale": 2 }
+  }
+}

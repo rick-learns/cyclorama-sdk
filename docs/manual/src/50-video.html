@@ -1,0 +1,780 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="video">5 Barndoor video chip (AV-2210)</h2>
+
+<p>The Barndoor chip (Avenell part AV-2210) generates the Cyclorama picture. It draws two scrolling
+tile layers and up to 64 sprites (8 × 8 or 16 × 16) into a 256 × 224 pixels picture, and then
+lights every pixel with the <em>light field</em>, which Avenell's product literature calls
+Stagelight. Every pixel's colour is taken from one of eight shade planes of colour RAM; the plane
+is chosen per pixel, in hardware, from four lights and an ambient level.</p>
+
+<p>This chapter documents the chip completely. Where Avenell recommends a particular way of using a
+feature, the recommendation is marked as such; everything else is a statement of how the hardware
+behaves on every CY-1 console.</p>
+
+<table class="regtable" id="vid-summary">
+<caption>Barndoor at a glance</caption>
+<tr><th>Item</th><th>Value</th></tr>
+<tr><td>Picture</td><td>256 × 224 pixels, 224 visible lines of 256 dots</td></tr>
+<tr><td>Video RAM</td><td>32 KiB VRAM, reached through the VADDR/VDATA port or by DMA</td></tr>
+<tr><td>Tiles</td><td>8 × 8 tiles, 3 bits per pixel, up to 1024 tiles</td></tr>
+<tr><td>Tile layers</td><td>BG0 and BG1, each a 64 × 32 map scrolled over a 512 × 256 plane</td></tr>
+<tr><td>Sprites</td><td>64 sprites, 8 × 8 or 16 × 16; 16 sprites per line</td></tr>
+<tr><td>Palettes</td><td>4 background and 4 sprite palettes of 8 colours; colour 0 transparent; 64 base colours</td></tr>
+<tr><td>Colour RAM</td><td>512 CRAM entries of 12-bit RGB (4096 colours): 64 base colours × eight shade planes</td></tr>
+<tr><td>Light field</td><td>four lights, ambient level, 3-bit wrapping shade adder, unlit flag, probe latch</td></tr>
+</table>
+
+<!-- ===================================================================== -->
+<h3 id="vid-timing">5.1 Display timing</h3>
+
+<p>All Cyclorama timing is derived from one crystal, the <em>master clock</em> M of 945/44 MHz
+(21,477,272.73 Hz). Barndoor produces one <em>dot</em> (one pixel position) every 4 master cycles, a dot
+clock of master ÷ 4 = 5.369 MHz. The Tally CPU executes one <em>cycle</em> every 6 master cycles, so one
+CPU cycle lasts exactly 1.5 dots. In this chapter "cycle" always means a CPU cycle.</p>
+
+<table class="regtable" id="vid-timing-table">
+<caption>Barndoor timing (exact)</caption>
+<tr><th>Quantity</th><th>Value</th></tr>
+<tr><td>Line length</td><td>1368 master cycles per line = 342 dots = 228 CPU cycles</td></tr>
+<tr><td>Line rate</td><td>15,699.76 lines per second</td></tr>
+<tr><td>Active part of a line</td><td>dots 0–255 (256 dots)</td></tr>
+<tr><td>Horizontal blank</td><td>dots 256–341 (86 dots; 344 master cycles; about 57.3 cycles)</td></tr>
+<tr><td>Frame length</td><td>262 lines per frame; 358,416 master cycles = 59,736 CPU cycles per frame</td></tr>
+<tr><td>Visible lines</td><td>lines 0–223 (224 visible lines)</td></tr>
+<tr><td>Vertical blank</td><td>lines 224–261 (38 lines)</td></tr>
+<tr><td>Frame rate</td><td>59.92 frames per second (59.9228 Hz)</td></tr>
+</table>
+
+<p>The visible picture is dots 0–255 of lines 0–223. Everything else is blanking. Lines are numbered
+0–261 and the current line number can be read from VCOUNT, which changes at dot 0 of each line.
+The CY-1 produces the same 262-line frame every time; there is no interlace and no alternate
+frame length.</p>
+
+<table class="regtable" id="vid-events">
+<caption>Timed events within the frame</caption>
+<tr><th>When</th><th>Event</th></tr>
+<tr><td>dot 0 of every line</td><td>VCOUNT takes the new line number. The chip latches all video registers and the contents of VRAM, OAM and CRAM for the line (5.8).</td></tr>
+<tr><td>dot 0 of line 224</td><td>Vertical blank begins: VSTAT bit 0 becomes 1 and IF bit 0 (VBLANK) is set. The controllers are sampled.</td></tr>
+<tr><td>dot 256 of every line</td><td>Horizontal blank begins. If VCOUNT = LINECMP, IF bit 1 (LINE) is set. On the probe line, PROBE is updated and its ready bit set.</td></tr>
+<tr><td>dot 0 of line 0</td><td>Vertical blank ends: VSTAT bit 0 becomes 0.</td></tr>
+</table>
+
+<figure class="figure" id="fig-frame-timing">
+<!--@svg:frame-timing-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 470 330" width="470" height="330" role="img" aria-label="Frame timing: 342 dots by 262 lines, visible area 256 dots by 224 lines" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><rect x="70" y="24" width="256" height="224" fill="currentColor" fill-opacity="0.12" stroke="currentColor"/><rect x="326" y="24" width="86" height="262" fill="currentColor" fill-opacity="0.35" stroke="currentColor"/><rect x="70" y="248" width="256" height="38" fill="currentColor" fill-opacity="0.35" stroke="currentColor"/><text x="198" y="129" text-anchor="middle" font-size="13">visible picture</text><text x="198" y="146" text-anchor="middle">dots 0–255 of lines 0–223</text><text x="198" y="271" text-anchor="middle">vertical blank: lines 224–261 (38 lines)</text><text x="369" y="155" text-anchor="middle" transform="rotate(90 369 155)">horizontal blank: dots 256–341 (86 dots)</text><line x1="70" y1="20" x2="70" y2="24" stroke="currentColor"/><text x="70" y="17" text-anchor="start">dot 0</text><line x1="326" y1="20" x2="326" y2="24" stroke="currentColor"/><text x="326" y="17" text-anchor="middle">dot 256</text><line x1="411" y1="20" x2="411" y2="24" stroke="currentColor"/><text x="411" y="17" text-anchor="end">dot 341</text><line x1="66" y1="24" x2="70" y2="24" stroke="currentColor"/><text x="63" y="28" text-anchor="end">line 0</text><line x1="66" y1="248" x2="70" y2="248" stroke="currentColor"/><text x="63" y="252" text-anchor="end">line 224</text><line x1="66" y1="285" x2="70" y2="285" stroke="currentColor"/><text x="63" y="289" text-anchor="end">line 261</text><circle cx="70" cy="248" r="3.5"/><text x="70" y="304">● VBLANK: IF bit 0 set at dot 0 of line 224</text><text x="70" y="320">Every line: registers latched at dot 0; LINE compare at dot 256</text></svg>
+<!--/@svg-->
+<figcaption>Figure 5-1. One frame. Each line is 342 dots wide; 262 lines make a frame. The light
+rectangle is the visible picture; the darker areas are blanking.</figcaption>
+</figure>
+
+<figure class="figure" id="fig-line-timing">
+<!--@svg:line-timing-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 190" width="800" height="190" role="img" aria-label="Line timing: 342 dots, 228 CPU cycles, 1368 master cycles; dot 0 latch, dot 256 LINE interrupt" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><rect x="24" y="56" width="512" height="28" fill="currentColor" fill-opacity="0.12" stroke="currentColor"/><rect x="536" y="56" width="172" height="28" fill="currentColor" fill-opacity="0.35" stroke="currentColor"/><text x="280" y="74" text-anchor="middle">active display: dots 0–255</text><text x="622" y="74" text-anchor="middle">horizontal blank</text><line x1="24" y1="84" x2="24" y2="90" stroke="currentColor"/><text x="24" y="101" text-anchor="middle">0</text><line x1="152" y1="84" x2="152" y2="90" stroke="currentColor"/><text x="152" y="101" text-anchor="middle">64</text><line x1="280" y1="84" x2="280" y2="90" stroke="currentColor"/><text x="280" y="101" text-anchor="middle">128</text><line x1="408" y1="84" x2="408" y2="90" stroke="currentColor"/><text x="408" y="101" text-anchor="middle">192</text><line x1="536" y1="84" x2="536" y2="90" stroke="currentColor"/><text x="536" y="101" text-anchor="middle">256</text><line x1="708" y1="84" x2="708" y2="90" stroke="currentColor"/><text x="708" y="101" text-anchor="middle">342</text><text x="720" y="88" font-style="italic">dots</text><line x1="24" y1="122" x2="708" y2="122" stroke="currentColor"/><line x1="24" y1="118" x2="24" y2="126" stroke="currentColor"/><text x="24" y="138" text-anchor="middle">0</text><line x1="195" y1="118" x2="195" y2="126" stroke="currentColor"/><text x="195" y="138" text-anchor="middle">57</text><line x1="366" y1="118" x2="366" y2="126" stroke="currentColor"/><text x="366" y="138" text-anchor="middle">114</text><line x1="536" y1="118" x2="536" y2="126" stroke="currentColor"/><text x="536" y="138" text-anchor="middle">170⅔</text><line x1="708" y1="118" x2="708" y2="126" stroke="currentColor"/><text x="708" y="138" text-anchor="middle">228</text><text x="720" y="126" font-style="italic">CPU cycles</text><line x1="24" y1="156" x2="708" y2="156" stroke="currentColor"/><line x1="24" y1="152" x2="24" y2="160" stroke="currentColor"/><text x="24" y="172" text-anchor="middle">0</text><line x1="536" y1="152" x2="536" y2="160" stroke="currentColor"/><text x="536" y="172" text-anchor="middle">1024</text><line x1="708" y1="152" x2="708" y2="160" stroke="currentColor"/><text x="708" y="172" text-anchor="middle">1368</text><text x="720" y="160" font-style="italic">master cycles</text><path d="M24 34 L24 56" stroke="currentColor" stroke-width="2"/><text x="28" y="30">dot 0: VCOUNT changes; registers, VRAM, OAM and CRAM latched for this line</text><path d="M536 48 L536 56" stroke="currentColor" stroke-width="2"/><text x="532" y="46" text-anchor="end">dot 256: LINE (IF bit 1), PROBE ready</text><text x="622" y="46" text-anchor="middle">344 master cycles</text></svg>
+<!--/@svg-->
+<figcaption>Figure 5-2. One line, with its dot, CPU-cycle and master-cycle scales. The register latch at
+dot 0 and the LINE interrupt at dot 256 bound the time available to a LINE handler.</figcaption>
+</figure>
+
+<p>To convert between the scales: dot = master cycles ÷ 4; cycle = master cycles ÷ 6; two cycles
+are three dots. Dot 256, where horizontal blank begins, is master cycle 1024 of the line, which is
+170⅔ cycles after the line begins.</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-vram">5.2 Video RAM</h3>
+
+<p>Barndoor owns 32 KiB VRAM, byte addresses 0000–7FFF. The CPU cannot address VRAM directly. It
+reaches it through a port of three registers, or by DMA (5.12).</p>
+
+<ul>
+<li><strong>VADDR</strong> (F000) holds a VRAM byte address. VADDR keeps bits 14–0; bit 15 is not stored and reads 0. Bit 0 is kept like the others and reads back as written, although no access uses it (see byte access below).</li>
+<li><strong>VDATA</strong> (F002) reads or writes the VRAM word at VADDR (bit 0 of VADDR is ignored
+for the word access), then adds VINC to VADDR modulo 32 KiB, so the address wraps from 7FFF to 0000 and bit 15 stays 0.</li>
+<li><strong>VINC</strong> (F004) holds the increment in bits 7–0 (reset value 2). Set VINC to 2 to
+walk through consecutive words, or to 128 to walk down a map column (64 entries × 2 bytes).</li>
+</ul>
+
+<p>VRAM words are little-endian: the byte at the even address is the low half of the word, the byte
+at the following odd address the high half. Tile data (5.3) is defined in bytes, so two consecutive
+tile bytes form one VDATA word with the first byte in bits 7–0.</p>
+
+<p><strong>Byte access to VDATA.</strong> The CPU address chooses the byte, not VADDR bit 0. A byte access to F002 reads or writes the low half of the
+VRAM word at VADDR, which is the byte at the even address, VADDR &amp; 7FFE. A byte access to
+F003 reads or writes the high half, the byte at the odd address, VADDR | 1. So with VADDR = 0011, a byte read of F002 reads VRAM byte 0010 and a byte read of F003 reads VRAM byte 0011. Either kind of access then adds VINC
+to VADDR. Avenell recommends word access for all VRAM transfers.</p>
+
+<p>Accessing VDATA while the chip is displaying (dots 0–255 of lines 0–223) costs 2 extra cycles for
+the instruction; see 5.12. The port may be used at any time; there is no lockout.</p>
+
+<table class="regtable" id="vid-vram-map">
+<caption>VRAM layout after reset (the map bases can be moved)</caption>
+<tr><th>Addresses</th><th>Size</th><th>Contents</th></tr>
+<tr><td>0000–5FFF</td><td>24 KiB</td><td>Tiles 0–1023, 24 bytes each (tile n at n × 24)</td></tr>
+<tr><td>6000–6FFF</td><td>4 KiB</td><td>BG0 map (BG0MAP reset value 12 → 6000)</td></tr>
+<tr><td>7000–7FFF</td><td>4 KiB</td><td>BG1 map (BG1MAP reset value 14 → 7000)</td></tr>
+</table>
+
+<p>Tiles and maps share one memory. A program that uses fewer than 1024 tiles may place maps inside
+the tile area, and a program that uses a map area for tiles simply must not enable a layer whose map
+is there. The chip does not protect either use from the other. VRAM contents at power-on are
+undefined; software must initialise every byte it displays.</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-tiles">5.3 Tile format</h3>
+
+<p>A tile is 8 pixels wide and 8 rows high, at 3 bits per pixel, stored as three bitplanes of 8 bytes. Tile n occupies
+the 24 bytes at VRAM address n × 24, so tile 1023 ends at 5FFF.</p>
+
+<table class="bits" id="vid-tile-layout">
+<caption>Layout of one tile (offsets from n × 24)</caption>
+<tr><th>Offset</th><th>Contents</th></tr>
+<tr><td>+0 to +7</td><td>plane 0 (bit 0 of each pixel), rows 0–7</td></tr>
+<tr><td>+8 to +15</td><td>plane 1 (bit 1 of each pixel), rows 0–7</td></tr>
+<tr><td>+16 to +23</td><td>plane 2 (bit 2 of each pixel), rows 0–7</td></tr>
+</table>
+
+<p>Within each byte, bit 7 is the leftmost pixel of the row and bit 0 the rightmost. For the pixel in
+column c (0–7, left to right) of row r, with p0, p1 and p2 the bits (7 − c) of bytes r, 8 + r and 16 + r,
+the pixel value is <code>p0 | p1 &lt;&lt; 1 | p2 &lt;&lt; 2</code>, a number from 0 to 7. Value 0 is
+transparent on both layers and on sprites; values 1–7 select colours 1–7 of the tile's palette.</p>
+
+<h4 id="vid-tile-example">Worked example: a lamp tile</h4>
+
+<p>The tile below is a small glowing lamp. Each digit is one pixel value:</p>
+
+<pre id="tile-pixels">
+0 0 1 1 1 1 0 0
+0 1 2 2 2 2 1 0
+1 2 3 4 4 3 2 1
+1 2 4 7 7 4 2 1
+1 2 4 7 7 4 2 1
+1 2 3 4 4 3 2 1
+0 1 2 2 2 2 1 0
+0 0 1 1 1 1 0 0
+</pre>
+
+<p>Row 2 is <code>1 2 3 4 4 3 2 1</code>. Its bit 0 values are 1 0 1 0 0 1 0 1, so plane 0 row 2 is
+binary 10100101 = A5 hex. Its bit 1 values are 0 1 1 0 0 1 1 0 = 66 hex (plane 1), and its bit 2
+values are 0 0 0 1 1 0 0 0 = 18 hex (plane 2). Treating every row the same way gives the 24 bytes of
+the tile, in VRAM order:</p>
+
+<pre id="tile-bytes">
+plane 0:  3C 42 A5 99 99 A5 42 3C
+plane 1:  00 3C 66 5A 5A 66 3C 00
+plane 2:  00 00 18 3C 3C 18 00 00
+</pre>
+
+<p>Written through VDATA with VINC = 2 starting at the tile's address, each word carries two
+consecutive bytes, the first in the low half:</p>
+
+<pre id="tile-words">
+.word 0x423C, 0x99A5, 0xA599, 0x3C42   ; plane 0
+.word 0x3C00, 0x5A66, 0x665A, 0x003C   ; plane 1
+.word 0x0000, 0x3C18, 0x183C, 0x0000   ; plane 2
+</pre>
+
+<!-- ===================================================================== -->
+<h3 id="vid-maps">5.4 Tile maps, map bases and scrolling</h3>
+
+<p>Each tile layer, BG0 and BG1, is drawn from a map of 64 × 32 entries (a plane of 512 × 256 dots).
+Entries are 2 bytes and stored row-major: entry (tx, ty) is at VRAM address
+<code>base + (ty × 64 + tx) × 2</code>, where tx is 0–63 and ty is 0–31. A map occupies 4 KiB.</p>
+
+<table class="bits" id="vid-map-entry">
+<caption>Map entry (one VRAM word)</caption>
+<tr><th>Bits</th><th>Field</th><th>Meaning</th></tr>
+<tr><td>9–0</td><td>tile</td><td>tile number 0–1023</td></tr>
+<tr><td>11–10</td><td>palette</td><td>background palette 0–3</td></tr>
+<tr><td>12</td><td>h-flip</td><td>1 = mirror the tile left to right</td></tr>
+<tr><td>13</td><td>v-flip</td><td>1 = mirror the tile top to bottom</td></tr>
+<tr><td>14</td><td>priority</td><td>1 = draw this tile above sprites (step 6 of 5.6)</td></tr>
+<tr><td>15</td><td>unlit</td><td>1 = ignore the light field and use the FIXED shade (5.9.6)</td></tr>
+</table>
+
+<p><strong>Map base registers.</strong> BG0MAP (F018) and BG1MAP (F01A) hold a value 0–15 in bits 3–0.
+The map base is the value × 2048 bytes. BG0MAP has reset value 12 (base 6000) and BG1MAP has reset
+value 14 (base 7000). Map addresses are formed modulo 32 KiB, so with value 15 the second half of the
+map wraps to VRAM 0000–07FF. The two layers may share one map.</p>
+
+<p><strong>Scrolling.</strong> Each layer has a horizontal scroll register (bits 8–0, 0–511) and a
+vertical scroll register (bits 7–0, 0–255). For screen pixel (x, y) the chip looks up map pixel
+(mx, my):</p>
+
+<pre>
+mx = (x + BG0SCX) mod 512        my = (y + BG0SCY) mod 256        (BG1 likewise with BG1SCX, BG1SCY)
+tx = mx &gt;&gt; 3     ty = my &gt;&gt; 3   (map entry)
+c  = mx &amp; 7      r  = my &amp; 7    (column and row inside the tile)
+if h-flip: c = 7 − c             if v-flip: r = 7 − r
+</pre>
+
+<p>The pixel value is then taken from row r, column c of the entry's tile as in 5.3. In words: screen
+x maps to map x = (x + BG0SCX) mod 512 and screen y maps to map y = (y + BG0SCY) mod 256, so the plane
+wraps in both directions and scrolling off one edge brings the opposite edge into view. The
+screen shows 256 of the plane's 512 columns and 224 of its 256 rows.</p>
+
+<p>A layer is drawn only while its enable bit in VCTRL is set (bit 1 for BG0, bit 2 for BG1).</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-sprites">5.5 Sprites and OAM</h3>
+
+<p>Object attribute memory (OAM) is 512 bytes inside Barndoor: 64 sprites × 8 bytes. Sprite i
+occupies OAM bytes i × 8 to i × 8 + 7. The CPU reaches OAM through OAMADDR (F01C, a byte address) and OAMDATA (F01E, which reads or writes the OAM word at OAMADDR and
+then adds 2 to OAMADDR, modulo 512), or by DMA. OAMADDR keeps bits 8–1; bit 0 is not stored and reads 0. A byte access to OAMDATA reads or writes one half of the word at OAMADDR (F01E the low byte, F01F the high byte) and also adds 2 to OAMADDR.</p>
+
+<table class="bits" id="vid-oam-entry">
+<caption>OAM entry for one sprite (four words)</caption>
+<tr><th>Offset</th><th>Bits</th><th>Field</th><th>Meaning</th></tr>
+<tr><td>+0</td><td>8–0</td><td>Y</td><td>signed 9-bit (−256..255): the screen line of the sprite's top row</td></tr>
+<tr><td>+2</td><td>8–0</td><td>X</td><td>signed 9-bit (−256..255): the screen column of the sprite's left edge</td></tr>
+<tr><td>+4</td><td>9–0</td><td>tile</td><td>tile number n</td></tr>
+<tr><td>+4</td><td>11–10</td><td>palette</td><td>sprite palette 0–3, which is palette 4–7 of CRAM</td></tr>
+<tr><td>+4</td><td>12</td><td>h-flip</td><td>mirror the whole sprite left to right</td></tr>
+<tr><td>+4</td><td>13</td><td>v-flip</td><td>mirror the whole sprite top to bottom</td></tr>
+<tr><td>+4</td><td>14</td><td>behind</td><td>1 = draw behind BG1 (step 3 of 5.6); 0 = in front of BG1 (step 5)</td></tr>
+<tr><td>+4</td><td>15</td><td>unlit</td><td>1 = ignore the light field and use the FIXED shade</td></tr>
+<tr><td>+6</td><td>0</td><td>size</td><td>0 = 8 × 8, 1 = 16 × 16</td></tr>
+<tr><td>+6</td><td>1</td><td>hide</td><td>1 = the sprite is ignored completely</td></tr>
+<tr><td>+6</td><td>15–2</td><td>—</td><td>reserved; ignored by the chip. Write 0.</td></tr>
+</table>
+
+<p>Bits 15–9 of the Y and X words are ignored. A sprite with X from −15 to −1 is partly visible at
+the left edge; columns outside 0–255 are simply not drawn. Likewise a sprite whose Y is negative
+shows only its lower rows.</p>
+
+<h4 id="vid-sprite-16">16 × 16 sprites</h4>
+
+<p>A 16 × 16 sprite with tile number n is built from four consecutive tiles:</p>
+
+<table class="bits" id="vid-sprite-quad">
+<caption>Tile arrangement of a 16 × 16 sprite (before flipping)</caption>
+<tr><th></th><th>left half</th><th>right half</th></tr>
+<tr><th>top half</th><td>n</td><td>n + 1</td></tr>
+<tr><th>bottom half</th><td>n + 2</td><td>n + 3</td></tr>
+</table>
+
+<p>Flips apply to the whole sprite. For sprite pixel (c, r), with c and r counted from the sprite's
+left and top edges (0 to w − 1 and 0 to h − 1, where w = h = 8 or 16): if h-flip is set, c = w − 1 − c;
+if v-flip is set, r = h − 1 − r. Then the tile is n + (c &gt;&gt; 3) + 2 × (r &gt;&gt; 3) and the pixel is
+column c &amp; 7, row r &amp; 7 of that tile, read as in 5.3. (For an 8 × 8 sprite this reduces to tile n.)
+Tile numbers are 10 bits; n + 1 to n + 3 are formed modulo 1024.</p>
+
+<h4 id="vid-sprite-eval">Sprite evaluation and the 16-per-line limit</h4>
+
+<p>For every visible line y, the chip scans OAM in order from sprite 0 to sprite 63. A sprite is on
+line y if its hide bit is 0 and <code>0 ≤ y − Y &lt; height</code>, where height is 8 or 16 by its size
+bit. Only the vertical position is considered, so sprites off the left or right edge still count.
+The first 16 sprites found are drawn on the line; if a 17th sprite is found, the rest of the line's
+sprites are not drawn and <strong>VSTAT bit 1</strong> (sprite overflow) is set. The overflow bit stays
+set until the CPU reads VSTAT, which clears it. The overflow of line y is recorded at dot 0 of line y, when that line's sprites are evaluated: a read of VSTAT by an instruction that starts at or after that moment sees it. Avenell recommends reading VSTAT once per frame, in
+the VBLANK handler, so that bit 1 reports the frame just shown.</p>
+
+<p>Sprite evaluation, drawing and overflow detection take place only when the display is enabled
+(VCTRL bit 0) and sprites are enabled (VCTRL bit 3).</p>
+
+<p>Where sprites overlap, the sprite with the lower OAM index wins. The chip resolves this first:
+at each column it takes the opaque pixel (pixel value 1–7) of the lowest-numbered sprite on the line
+that covers that column. That one sprite pixel then enters the layer order of 5.6 at step 3 or
+step 5 according to that sprite's behind flag.</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-compositing">5.6 Layer compositing order</h3>
+
+<p>For every pixel the chip considers the layers from back to front and keeps the frontmost pixel
+that is not transparent. Only enabled layers take part. Colour 0 is transparent in every tile and
+every sprite. The order, back to front, is:</p>
+
+<ol id="composite-order">
+<li>the backdrop: palette 0 colour 0 (base index 0), always present and always lit;</li>
+<li>BG0 tiles without priority;</li>
+<li>the sprite pixel, if its sprite has the behind flag set;</li>
+<li>BG1 tiles without priority;</li>
+<li>the sprite pixel, if its sprite has the behind flag clear;</li>
+<li>BG0 tiles with priority, then BG1 tiles with priority (a BG1 priority tile covers a BG0 priority tile).</li>
+</ol>
+
+<p>The winning pixel yields a <em>base index</em> and an unlit flag:</p>
+
+<ul>
+<li>for a tile, base index = palette × 8 + pixel (0–31), unlit = bit 15 of its map entry;</li>
+<li>for a sprite, base index = (4 + sprite palette) × 8 + pixel (32–63), unlit = bit 15 of OAM +4;</li>
+<li>for the backdrop, base index = 0 and unlit = 0.</li>
+</ul>
+
+<p>The light field (5.9) then chooses the shade, and the colour on screen is CRAM entry
+shade × 64 + palette × 8 + pixel, that is, shade × 64 + base index.</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-cram">5.7 Colour RAM</h3>
+
+<p>Colour RAM (CRAM) holds 512 CRAM entries of 12-bit colour, 4 bits each of red, green and blue
+(4096 colours). It is organised as eight shade planes of 64 base colours:</p>
+
+<pre>
+CRAM index = shade × 64 + palette × 8 + pixel
+             shade 0–7, palette 0–7 (0–3 background, 4–7 sprite), pixel 0–7
+</pre>
+
+<table class="regtable" id="vid-cram-map">
+<caption>CRAM organisation</caption>
+<tr><th>Index</th><th>Contents</th></tr>
+<tr><td>000–03F</td><td>shade plane 0: palettes 0–7, 8 colours each</td></tr>
+<tr><td>040–07F</td><td>shade plane 1</td></tr>
+<tr><td>…</td><td>…</td></tr>
+<tr><td>1C0–1FF</td><td>shade plane 7</td></tr>
+</table>
+
+<p>The CPU reaches CRAM through CRAMADDR (F020, an entry index 0–511 in bits 8–0) and CRAMDATA (F022).
+CRAMDATA reads or writes entry CRAMADDR in the format <code>0000 RRRR GGGG BBBB</code> and then adds
+1 to CRAMADDR, wrapping from 511 to 0. Bits 15–12 are ignored on writing and read 0. A byte access
+to F022 reaches bits 7–0 (green and blue), one to F023 bits 15–8 (red); either advances CRAMADDR.
+Each channel runs from 0 (none) to 15 (full). CRAM contents at power-on are undefined.</p>
+
+<p>Where a picture must be given in 8 bits per channel, for a monitor test set or a host display, the reference model converts each CRAM colour by multiplying each 4-bit channel by 17, so that 0 stays 0 and 15 × 17 = 255: entry <code>0F80</code> becomes red 255, green 136, blue 0.</p>
+
+<p>Entry 0 of each plane (palette 0 colour 0) is the backdrop colour for that shade. Entries for
+colour 0 of other palettes are never displayed, because colour 0 is transparent, but they are
+ordinary memory. When the display is disabled every pixel shows entry FIXED × 64 (5.10).</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-pipeline">5.8 The line pipeline: the dot-0 rule</h3>
+
+<p>Barndoor draws each visible line y into a line buffer during line y itself, starting at dot 0, and the
+finished buffer is scanned out to the television during line y + 1 (Appendix E, E.3).
+VCOUNT, the LINE interrupt and the probe all count the lines being drawn, so the one-line delay is
+invisible to programs. The programmer's rule is simple and exact:</p>
+
+<div class="note" id="vid-dot0-rule">
+<p><strong>Each visible line is drawn entirely from the state present at dot 0 of that line.</strong>
+Every video register (VCTRL, the scroll and map base registers, the light registers L0X–L3F,
+AMBIENT, FIXED, PROBEX and PROBEY) is latched at dot 0, and the line is drawn from the VRAM, OAM and
+CRAM contents present at that moment.</p>
+</div>
+
+<p>Consequences:</p>
+<ul>
+<li>A write that takes effect before dot 0 of line y is seen by line y and by every later line until
+it is changed. A write that takes effect at or after dot 0 of line y is first seen on line y + 1. A
+change made in the middle of a line never splits that line.</li>
+<li>Writes made during vertical blank are all seen from line 0 of the next frame.</li>
+<li>Register writes by an instruction take effect at the time the instruction starts (see the CPU
+chapter). An instruction that starts before dot 0 therefore affects the new line, even if it
+finishes after dot 0.</li>
+<li>Since the registers are latched every line, any of them may be given a different value for
+different lines of the same frame, for example to scroll a status panel separately from the play
+field (5.13).</li>
+</ul>
+
+<!-- ===================================================================== -->
+<h3 id="vid-light">5.9 The light field (Stagelight)</h3>
+
+<p>Barndoor does not simply look up a pixel's colour. Each of the 64 base colours exists in eight
+shade planes, and for every lit pixel the chip computes which plane to use from four positioned
+lights and an ambient level. The computation is done by four identical light pipelines and a 3-bit
+adder, one result per dot, with no CPU time spent.</p>
+
+<h4 id="vid-light-regs">5.9.1 Light registers</h4>
+
+<p>Each light i (0–3) has four registers, at F030 + 8 × i:</p>
+
+<table class="bits" id="vid-light-bits">
+<caption>Light registers (all latched at dot 0 of each line)</caption>
+<tr><th>Register</th><th>Bits</th><th>Meaning</th></tr>
+<tr><td>LiX</td><td>9–0</td><td>X position, signed 10-bit (−512..511), in screen pixels</td></tr>
+<tr><td>LiY</td><td>9–0</td><td>Y position, signed 10-bit (−512..511), in screen lines</td></tr>
+<tr><td>LiI</td><td>3–0</td><td>intensity I, signed 4-bit (−8..7). Intensity 0 turns the light off.</td></tr>
+<tr><td>LiF</td><td>2–0</td><td>falloff F (0–7): the distance is shifted right by F</td></tr>
+<tr><td>LiF</td><td>5–4</td><td>shape: 0 diamond, 1 square, 2 octagon, 3 band</td></tr>
+</table>
+
+<p>Two further registers apply to all lights: <strong>AMBIENT</strong> (F050, bits 2–0), added to every
+lit pixel's sum, and <strong>FIXED</strong> (F052, bits 2–0, reset value 7), the shade used by unlit
+pixels and by every pixel while the light field is disabled. The light field is enabled by VCTRL bit 4.
+At reset every intensity is 0, so all lights are off, and AMBIENT is 0.</p>
+
+<p>Light positions are screen coordinates. They are not affected by scrolling: a light that should
+stay with an object in the play field must be moved when the layer scrolls. A light may be placed
+off the screen, up to 512 pixels beyond the left or top edge; its glow still reaches the screen if
+its intensity and falloff allow.</p>
+
+<h4 id="vid-light-shapes">5.9.2 Distance and the four shapes</h4>
+
+<p>For a pixel at screen position (x, y), with x 0–255 and y 0–223, and a light at (LX, LY), the
+chip forms the absolute offsets dx = |x − LX| and dy = |y − LY| and from them a distance d chosen by
+the light's shape:</p>
+
+<table class="regtable" id="vid-shapes">
+<caption>Distance shapes</caption>
+<tr><th>Shape</th><th>LiF bits 5–4</th><th>Distance d</th><th>Pool of light</th></tr>
+<tr><td>diamond</td><td>0</td><td><code>dx + dy</code></td><td>a diamond, points up, down, left and right</td></tr>
+<tr><td>square</td><td>1</td><td><code>max(dx, dy)</code></td><td>a square aligned with the screen</td></tr>
+<tr><td>octagon</td><td>2</td><td><code>max(dx, dy) + (min(dx, dy) &gt;&gt; 1)</code></td><td>an octagon, the closest shape to a round pool</td></tr>
+<tr><td>band</td><td>3</td><td><code>dy</code></td><td>a horizontal band across the full width; LX is ignored</td></tr>
+</table>
+
+<p>All arithmetic is on whole numbers; <code>&gt;&gt; 1</code> discards the remainder. With LX and LY in
+−512…511, dx can reach 767 and dy 735, so a distance can reach 1502 (diamond, light at the far corner
+off screen); the largest octagon distance is 767 + (735 &gt;&gt; 1) = 1134. The pipelines are wide enough
+that no distance overflows.</p>
+
+<figure class="figure" id="fig-shape-diamond">
+<!--@svg:shape-diamond-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 216" width="260" height="216" role="img" aria-label="Iso-shade plot of a diamond light, intensity 4, falloff 3" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><g transform="translate(10 6)"><rect width="240" height="180" fill="#1e1e1e"/><polygon points="184,90 120,154 56,90 120,26" fill="#484848"/><polygon points="168,90 120,138 72,90 120,42" fill="#767676"/><polygon points="152,90 120,122 88,90 120,58" fill="#a6a6a6"/><polygon points="136,90 120,106 104,90 120,74" fill="#dcdcdc"/><text x="196" y="94" text-anchor="middle" fill="#fff" font-weight="bold">0</text><text x="176" y="94" text-anchor="middle" fill="#fff" font-weight="bold">1</text><text x="160" y="94" text-anchor="middle" fill="#fff" font-weight="bold">2</text><text x="144" y="94" text-anchor="middle" fill="#000" font-weight="bold">3</text><text x="120" y="82" text-anchor="middle" fill="#000" font-weight="bold">4</text><circle cx="120" cy="90" r="3" fill="#000" stroke="#fff"/></g><text x="10" y="206">d = dx + dy</text></svg>
+<!--/@svg-->
+<figcaption>Figure 5-3. Diamond, I = 4, F = 3, AMBIENT = 0. Numbers are shades.</figcaption>
+</figure>
+<figure class="figure" id="fig-shape-square">
+<!--@svg:shape-square-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 216" width="260" height="216" role="img" aria-label="Iso-shade plot of a square light, intensity 4, falloff 3" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><g transform="translate(10 6)"><rect width="240" height="180" fill="#1e1e1e"/><polygon points="184,154 56,154 56,26 184,26" fill="#484848"/><polygon points="168,138 72,138 72,42 168,42" fill="#767676"/><polygon points="152,122 88,122 88,58 152,58" fill="#a6a6a6"/><polygon points="136,106 104,106 104,74 136,74" fill="#dcdcdc"/><text x="196" y="94" text-anchor="middle" fill="#fff" font-weight="bold">0</text><text x="176" y="94" text-anchor="middle" fill="#fff" font-weight="bold">1</text><text x="160" y="94" text-anchor="middle" fill="#fff" font-weight="bold">2</text><text x="144" y="94" text-anchor="middle" fill="#000" font-weight="bold">3</text><text x="120" y="82" text-anchor="middle" fill="#000" font-weight="bold">4</text><circle cx="120" cy="90" r="3" fill="#000" stroke="#fff"/></g><text x="10" y="206">d = max(dx, dy)</text></svg>
+<!--/@svg-->
+<figcaption>Figure 5-4. Square, I = 4, F = 3, AMBIENT = 0.</figcaption>
+</figure>
+<figure class="figure" id="fig-shape-octagon">
+<!--@svg:shape-octagon-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 216" width="260" height="216" role="img" aria-label="Iso-shade plot of a octagon light, intensity 4, falloff 3" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><g transform="translate(10 6)"><rect width="240" height="180" fill="#1e1e1e"/><polygon points="184,90 162.7,132.7 120,154 77.3,132.7 56,90 77.3,47.3 120,26 162.7,47.3" fill="#484848"/><polygon points="168,90 152,122 120,138 88,122 72,90 88,58 120,42 152,58" fill="#767676"/><polygon points="152,90 141.3,111.3 120,122 98.7,111.3 88,90 98.7,68.7 120,58 141.3,68.7" fill="#a6a6a6"/><polygon points="136,90 130.7,100.7 120,106 109.3,100.7 104,90 109.3,79.3 120,74 130.7,79.3" fill="#dcdcdc"/><text x="196" y="94" text-anchor="middle" fill="#fff" font-weight="bold">0</text><text x="176" y="94" text-anchor="middle" fill="#fff" font-weight="bold">1</text><text x="160" y="94" text-anchor="middle" fill="#fff" font-weight="bold">2</text><text x="144" y="94" text-anchor="middle" fill="#000" font-weight="bold">3</text><text x="120" y="82" text-anchor="middle" fill="#000" font-weight="bold">4</text><circle cx="120" cy="90" r="3" fill="#000" stroke="#fff"/></g><text x="10" y="206">d = max(dx, dy) + (min(dx, dy) &gt;&gt; 1)</text></svg>
+<!--/@svg-->
+<figcaption>Figure 5-5. Octagon, I = 4, F = 3, AMBIENT = 0.</figcaption>
+</figure>
+<figure class="figure" id="fig-shape-band">
+<!--@svg:shape-band-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 216" width="260" height="216" role="img" aria-label="Iso-shade plot of a band light, intensity 4, falloff 3" style="max-width:100%;height:auto" font-family="sans-serif" font-size="11" fill="currentColor"><g transform="translate(10 6)"><rect width="240" height="180" fill="#1e1e1e"/><rect x="0" y="26" width="240" height="128" fill="#484848"/><rect x="0" y="42" width="240" height="96" fill="#767676"/><rect x="0" y="58" width="240" height="64" fill="#a6a6a6"/><rect x="0" y="74" width="240" height="32" fill="#dcdcdc"/><text x="170" y="170" text-anchor="middle" fill="#fff" font-weight="bold">0</text><text x="170" y="150" text-anchor="middle" fill="#fff" font-weight="bold">1</text><text x="170" y="134" text-anchor="middle" fill="#fff" font-weight="bold">2</text><text x="170" y="118" text-anchor="middle" fill="#000" font-weight="bold">3</text><text x="170" y="94" text-anchor="middle" fill="#000" font-weight="bold">4</text><circle cx="120" cy="90" r="3" fill="#000" stroke="#fff"/></g><text x="10" y="206">d = dy</text></svg>
+<!--/@svg-->
+<figcaption>Figure 5-6. Band, I = 4, F = 3, AMBIENT = 0. The band extends across the whole line.</figcaption>
+</figure>
+
+<h4 id="vid-light-level">5.9.3 Level of one light</h4>
+
+<p>The distance is shifted right by the falloff F and subtracted from the size of the intensity. The
+result cannot fall below zero, and the sign of the intensity is then applied:</p>
+
+<pre>
+level = sign(I) × max(0, |I| − (d &gt;&gt; F))
+</pre>
+
+<p>So a light of intensity 5 contributes 5 at its centre, 4 once d &gt;&gt; F reaches 1, and so on, down
+to 0 from d &gt;&gt; F = 5 outwards. Each step of level is 2<sup>F</sup> pixels of distance wide: F = 0
+gives a hard pool one pixel per step, F = 7 a very broad one, 128 pixels per step.</p>
+
+<p>A negative intensity makes a light that <em>subtracts</em>: I = −3 contributes −3 at its centre,
+−2 one step out, and so on. A light with intensity 0 contributes 0 everywhere. Note that I = −8
+contributes −8 at its centre, which the 3-bit adder (5.9.4) cannot tell apart from 0; one step out it
+contributes −7.</p>
+
+<h4 id="vid-light-adder">5.9.4 The shade adder: the sum wraps</h4>
+
+<p>The shade of a lit pixel is the sum of AMBIENT and the four levels, taken modulo 8:</p>
+
+<pre>
+shade = (AMBIENT + level0 + level1 + level2 + level3) mod 8
+</pre>
+
+<p>The adder is three bits wide. It keeps only the low three bits of the sum: it wraps and does not
+saturate. A sum of 8 gives shade 0, a sum of 9 gives shade 1, and a sum of −1 gives shade 7. This is
+the documented behaviour of every Barndoor chip and programs may rely on it, but a program that
+intends ordinary lighting must arrange that the sum never leaves the range 0–7.</p>
+
+<div class="warning" id="vid-wrap-guidance">
+<p><strong>Keep totals below 8 for ordinary lighting.</strong> Wherever two or more lights can
+overlap, AMBIENT plus the intensities of the positive lights that can reach a pixel should not exceed
+7, and negative lights should not take the sum below 0. Otherwise the brightest part of the overlap
+turns dark (or, below zero, the darkest part turns bright).</p>
+</div>
+
+<p>For reference, the complete rule, exactly as specified by Avenell engineering:</p>
+
+<pre id="vid-rule">
+diamond:  d = dx + dy
+square:   d = max(dx, dy)
+octagon:  d = max(dx, dy) + (min(dx, dy) &gt;&gt; 1)
+band:     d = dy
+          (dx = |x - LX|, dy = |y - LY|; a light with intensity 0 contributes 0)
+level  = sign(I) * max(0, |I| - (d &gt;&gt; F))
+shade  = (AMBIENT + sum of the four levels) mod 8
+colour = CRAM[shade * 64 + palette * 8 + pixel]
+unlit pixels, and all pixels while VCTRL bit 4 = 0:  shade = FIXED
+</pre>
+
+<h4 id="vid-shade-planes">5.9.5 Shade planes</h4>
+
+<p>The light field only chooses a plane. What the planes contain is entirely up to the program: the
+hardware does not require the planes to be related in any way, and any 12-bit colour may be stored in
+any of the 512 entries.</p>
+
+<p>Avenell recommends that you <strong>fill shade planes with darkening ramps for natural
+lighting</strong>: plane 7 holds each palette at full brightness, plane 0 the darkest version
+(usually black), and the planes between hold evenly darker copies. The development kit's palette tool
+builds such ramps with the formula</p>
+
+<pre>
+channel in plane k = (channel in plane 7 × k + 3) / 7        (whole-number division, each of R, G, B)
+</pre>
+
+<p>which takes a full channel of 15 through 0, 2, 4, 6, 9, 11, 13, 15 for planes 0 to 7. With ramps
+loaded, shade 0 is darkness and shade 7 is full light, and a scene lit by a lantern looks lit by a
+lantern.</p>
+
+<h4 id="vid-unlit">5.9.6 Unlit pixels and the FIXED shade</h4>
+
+<p>If the light field is disabled (VCTRL bit 4 = 0), or the winning pixel is unlit (bit 15 of its map
+entry or of its sprite's OAM word +4 is set), its shade is the value of FIXED instead of the computed
+shade. The backdrop is always lit. Use unlit tiles for status panels, scores and text, which should
+stay readable whatever the lights are doing; with ramps loaded, FIXED = 7 shows them at full
+brightness.</p>
+
+<h4 id="vid-lantern">5.9.7 Worked example: the lantern</h4>
+
+<p>This is the lighting style the development kit is built around: a dark scene, faintly visible
+everywhere, with a lantern that follows the hero. We add a brazier on the wall to show how two lights
+combine, and how they must be balanced. The shade planes hold ramps as in 5.9.5; AMBIENT = 1 gives
+the faint glow; light 0 is the lantern, an octagon of intensity 6 and falloff 3 at the hero's screen
+position (128, 112); light 1 is the brazier, a square of intensity 3 and falloff 2 at (148, 104).
+Lights 2 and 3 are off.</p>
+
+<pre id="lantern-code">
+; Lantern set-up.  Assumes CRAM already holds ramps (5.9.5).
+lantern_init:
+        MOV R0, #1          ; AMBIENT = 1, a faint glow everywhere
+        ST  R0, [AMBIENT]
+        MOV R0, #128        ; L0X = 128, the hero's screen x
+        ST  R0, [L0X]
+        MOV R0, #112        ; L0Y = 112, the hero's screen y
+        ST  R0, [L0Y]
+        MOV R0, #6          ; L0I = 6, lantern intensity
+        ST  R0, [L0I]
+        MOV R0, #0x23       ; L0F: shape 2 (octagon) in bits 5-4, falloff 3
+        ST  R0, [L0F]
+        MOV R0, #148        ; L1X = 148, brazier x
+        ST  R0, [L1X]
+        MOV R0, #104        ; L1Y = 104, brazier y
+        ST  R0, [L1Y]
+        MOV R0, #3          ; L1I = 3, brazier intensity
+        ST  R0, [L1I]
+        MOV R0, #0x12       ; L1F: shape 1 (square) in bits 5-4, falloff 2
+        ST  R0, [L1F]
+        MOV R0, #0          ; L2I = 0 and L3I = 0: lights 2 and 3 off
+        ST  R0, [L2I]
+        ST  R0, [L3I]
+        MOV R0, #7          ; FIXED = 7: unlit status panel at full brightness
+        ST  R0, [FIXED]
+        MOV R0, #0x1F       ; VCTRL: display, BG0, BG1, sprites, light field
+        ST  R0, [VCTRL]
+        RTS
+</pre>
+
+<p>Each frame, the VBLANK handler writes the hero's new screen position to L0X and L0Y, and the
+lantern follows. The table works the shade out by hand for several pixels.</p>
+
+<table class="regtable" id="lantern-shades" data-ambient="1" data-lights="128,112,6,3,octagon;148,104,3,2,square">
+<caption>Shades in the lantern example (AMBIENT = 1)</caption>
+<tr><th>Pixel (x, y)</th><th>Lantern: dx, dy, d, d &gt;&gt; 3, level</th><th>Brazier: dx, dy, d, d &gt;&gt; 2, level</th><th>Sum</th><th>Shade</th></tr>
+<tr data-x="128" data-y="112" data-shade="7"><td>(128, 112) hero</td><td>0, 0, 0, 0, 6</td><td>20, 8, 20, 5, 0</td><td>1 + 6 + 0 = 7</td><td>7</td></tr>
+<tr data-x="136" data-y="112" data-shade="6"><td>(136, 112)</td><td>8, 0, 8, 1, 5</td><td>12, 8, 12, 3, 0</td><td>1 + 5 + 0 = 6</td><td>6</td></tr>
+<tr data-x="128" data-y="130" data-shade="5"><td>(128, 130)</td><td>0, 18, 18, 2, 4</td><td>20, 26, 26, 6, 0</td><td>1 + 4 + 0 = 5</td><td>5</td></tr>
+<tr data-x="110" data-y="100" data-shade="4"><td>(110, 100)</td><td>18, 12, 18 + 6 = 24, 3, 3</td><td>38, 4, 38, 9, 0</td><td>1 + 3 + 0 = 4</td><td>4</td></tr>
+<tr data-x="80" data-y="112" data-shade="1"><td>(80, 112)</td><td>48, 0, 48, 6, 0</td><td>68, 8, 68, 17, 0</td><td>1 + 0 + 0 = 1</td><td>1</td></tr>
+<tr data-x="0" data-y="0" data-shade="1"><td>(0, 0) corner</td><td>128, 112, 128 + 56 = 184, 23, 0</td><td>148, 104, 148, 37, 0</td><td>1 + 0 + 0 = 1</td><td>1</td></tr>
+<tr data-x="152" data-y="104" data-shade="6"><td>(152, 104)</td><td>24, 8, 24 + 4 = 28, 3, 3</td><td>4, 0, 4, 1, 2</td><td>1 + 3 + 2 = 6</td><td>6</td></tr>
+<tr data-x="148" data-y="96" data-shade="5"><td>(148, 96)</td><td>20, 16, 20 + 8 = 28, 3, 3</td><td>0, 8, 8, 2, 1</td><td>1 + 3 + 1 = 5</td><td>5</td></tr>
+<tr data-x="140" data-y="108" data-shade="7"><td>(140, 108)</td><td>12, 4, 12 + 2 = 14, 1, 5</td><td>8, 4, 8, 2, 1</td><td>1 + 5 + 1 = 7</td><td>7</td></tr>
+<tr data-x="146" data-y="105" data-shade="0"><td>(146, 105) wraps</td><td>18, 7, 18 + 3 = 21, 2, 4</td><td>2, 1, 2, 0, 3</td><td>1 + 4 + 3 = 8, wraps to 0</td><td>0</td></tr>
+</table>
+
+<p>The last row is the case the warning in 5.9.4 describes. Between the lantern and the brazier the
+sum reaches 8, and the adder wraps it to 0: a dark speck appears in the brightest part of the scene.
+Following the launch-era guidance (keep totals below 8 for ordinary lighting), the cure is to budget
+the intensities: AMBIENT 1 + lantern 4 + brazier 2 can never exceed 7, wherever the hero walks. An
+alternative is to move the brazier's light elsewhere, or turn it off, while the hero is near it.</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-disabled">5.10 Display disabled</h3>
+
+<p>While VCTRL bit 0 is 0 the display is disabled. Every pixel of every line shows the single colour
+CRAM[FIXED × 64], the colour of palette 0 entry 0 in shade plane FIXED. No sprite evaluation takes
+place, VSTAT bit 1 is never set, and the probe does not latch. Timing is unaffected: lines, VCOUNT,
+VBLANK and LINE interrupts and the port wait rule of 5.12 continue exactly as when the display is
+enabled. VCTRL resets to 0, so the screen shows this colour until the program enables the display.
+Avenell recommends leaving the display disabled while VRAM, OAM and CRAM are being loaded at power-on.</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-probe">5.11 The probe latch</h3>
+
+<p>The probe reports what the beam actually produced at one chosen pixel. Set PROBEX (F054, bits 7–0,
+column 0–255) and PROBEY (F056, bits 8–0, line 0–223). Like every video register they are latched at
+dot 0 of each line. When a line y is drawn with the display enabled and the PROBEY latched for that
+line equals y, the chip captures the final pixel output at column PROBEX: its base index and the shade
+it was drawn with (FIXED for an unlit pixel or with the light field disabled). At dot 256 of that line
+the capture is copied to PROBE and the ready bit is set.</p>
+
+<table class="bits" id="vid-probe-bits">
+<caption>PROBE (F058, read only)</caption>
+<tr><th>Bits</th><th>Meaning</th></tr>
+<tr><td>5–0</td><td>base index of the pixel: palette × 8 + pixel (0 for the backdrop, 32–63 for a sprite)</td></tr>
+<tr><td>10–8</td><td>shade 0–7 used for the pixel</td></tr>
+<tr><td>15</td><td>ready: 1 when a capture has been made since PROBE was last read (same as VSTAT bit 2)</td></tr>
+<tr><td>7–6, 14–11</td><td>read 0</td></tr>
+</table>
+
+<p>Reading PROBE clears the ready bit, both in PROBE and in VSTAT bit 2. Reading VSTAT does not clear
+it. If a new capture is made before PROBE is read, it replaces the old one and ready stays set. The
+colour on screen at the probed pixel is CRAM[shade × 64 + base index].</p>
+
+<p>The probe position is an ordinary latched register pair: PROBEX and PROBEY may be changed at any
+time, and the new values apply from the next line's dot 0. A capture is made on every line whose
+latched PROBEY equals that line's number, so the probe can capture on more than one line of a frame if
+PROBEY is changed between them. A PROBEY of 224 or above never matches. A convenient way to wait for a
+capture is to set LINECMP = PROBEY and read PROBE in the LINE handler, which runs at the same dot 256.</p>
+
+<p>The probe is intended for testing a program's lighting (a light-meter display during development,
+or a check that the hero is visible before a scene begins).</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-dma">5.12 DMA and video port timing</h3>
+
+<h4 id="vid-port-wait">Port wait cycles</h4>
+
+<p>During active display (dots 0–255 of lines 0–223) Barndoor is fetching for the picture, and CPU
+access to its memories must wait. An instruction that reads or writes VDATA, OAMDATA or CRAMDATA during
+active display takes 2 extra cycles for the access. During horizontal blank (dots 256–341) and
+vertical blank (lines 224–261) there is no penalty. The rule depends only on the beam position,
+judged when the instruction starts; it applies whether or not the display is enabled, and to fetches and
+stack accesses that reach a port as well as to loads and stores. The beam's dot is m ÷ 4 rounded down,
+where m is the master-cycle offset of the instruction's start within its line: an instruction starting at
+offset 1022 (dot 255) of a visible line is in active display, one starting at offset 1024 (dot 256) is not. The address
+registers (VADDR, VINC, OAMADDR, CRAMADDR) and all other video registers never wait.</p>
+
+<h4 id="vid-dma-transfer">DMA</h4>
+
+<p>The DMA unit copies words from ROM or RAM into VRAM, OAM or CRAM. It reads source addresses 0000–DFFF exactly as the processor would (fixed bank, the bank window as currently selected, work RAM and cartridge RAM); source addresses E000–FFFF read as 0, with no side effects on any register and no port wait. The source address wraps from FFFE to 0000. Program DMASRC (source
+CPU address; DMASRC keeps bits 15–1, and bit 0 reads 0), DMADST (destination) and DMALEN (number of words), then write DMACTL with
+the target in bits 1–0:</p>
+
+<table class="regtable" id="vid-dma-targets">
+<caption>DMA targets</caption>
+<tr><th>DMACTL bits 1–0</th><th>Target</th><th>DMADST means</th><th>DMADST advance per word</th></tr>
+<tr><td>0</td><td>none</td><td>—</td><td>the write does nothing</td></tr>
+<tr><td>1</td><td>VRAM</td><td>VRAM byte address DMADST &amp; 7FFE</td><td>+2; the VRAM address wraps within 32 KiB (VINC is not used)</td></tr>
+<tr><td>2</td><td>OAM</td><td>OAM byte address DMADST &amp; 01FE</td><td>+2; the OAM address wraps within 512 bytes</td></tr>
+<tr><td>3</td><td>CRAM</td><td>CRAM index DMADST &amp; 01FF</td><td>+1; the index wraps from 511 to 0 (bits 15–12 of each word are dropped)</td></tr>
+</table>
+
+<p>DMASRC advances by 2 per word. DMADST keeps all 16 bits and advances by 2 (VRAM, OAM) or 1 (CRAM) per
+word; both wrap modulo 64 KiB, and only the low bits of DMADST, as in the table, address the target.
+DMALEN counts down to 0. After the transfer all three hold their final values: for example, an OAM
+transfer of 2 words from DMADST 01FE writes OAM bytes 01FE–01FF and 0000–0001 and leaves DMADST = 0202. While the transfer runs the CPU is stopped. The cost, in cycles, is</p>
+
+<pre>
+4 + 2 × DMALEN     if the transfer starts outside active display
+4 + 4 × DMALEN     if the transfer starts during active display (dot &lt; 256 of lines 0–223)
+</pre>
+
+<p>The whole transfer is decided by the beam position when it starts: a transfer started in vertical
+blank that runs on into line 0 still costs 4 + 2 × DMALEN. For the purposes of the dot-0 rule
+(5.8), the data of a transfer is in place from the moment the transfer starts. With DMALEN = 0 no words
+are moved and the stop lasts 4 cycles.</p>
+
+<p>Worked costs: loading all 512 CRAM entries in vertical blank takes 4 + 2 × 512 = 1028 cycles, about
+4½ lines; a full 256-word OAM copy takes 516 cycles. Vertical blank is 38 lines, 8664 cycles, so a
+program can refresh OAM and CRAM and move several kilobytes of tiles in every blank. Avenell recommends
+DMA from work RAM or ROM only.</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-line-irq">5.13 The LINE interrupt and the horizontal blank</h3>
+
+<p>LINECMP (F00C, bits 8–0, reset value 511, which never matches) selects a line. At dot 256 of the
+line where VCOUNT equals LINECMP, the start of that line's horizontal blank, IF bit 1 is set. If IE bit 1
+and the CPU's interrupt enable are set, the CPU takes the LINE interrupt once the current instruction
+completes; entry takes 12 cycles (see the interrupts chapter). LINECMP may be any line, including
+vertical-blank lines 224–261, and may be rewritten by the handler to request another interrupt later
+in the same frame.</p>
+
+<p>Because of the dot-0 rule, a register written by a LINE handler on line y first affects line y + 1.
+To change a register from line 160 downward, set LINECMP = 159. The handler must make its writes
+before dot 0 of the next line, and the time available is short:</p>
+
+<table class="regtable" id="vid-hblank-budget">
+<caption>Horizontal blank budget for a LINE handler</caption>
+<tr><th>Item</th><th>Time</th></tr>
+<tr><td>dot 256 to dot 0 of the next line</td><td>86 dots = 344 master cycles, about 57.3 cycles</td></tr>
+<tr><td>instruction in progress at dot 256</td><td>0 up to 19 cycles (the longest instruction without port wait cycles, a shift by an immediate count of 15; a PUSHM or POPM of eight registers through the video ports would take 34), or the rest of a DMA transfer</td></tr>
+<tr><td>interrupt entry</td><td>12 cycles</td></tr>
+<tr><td>left for the handler</td><td>about 45 cycles at best, about 26 cycles in the worst case</td></tr>
+</table>
+
+<p>A write counts for the new line if the instruction making it <em>starts</em> before dot 0. An
+absolute store (<code>ST R0, [BG0SCX]</code>) takes 6 cycles, so a handler that already holds its
+values in registers can make three or four register changes in time. A handler that needs more should
+save and restore as little as possible, and should not start a DMA transfer. Handlers must clear IF bit
+1 by writing 1 to it.</p>
+
+<pre id="vid-split-example">
+; Status panel: lines 0-191 scroll with the play field, lines 192-223
+; show BG0 unscrolled.  R6 is reserved for the handler (holds 0).
+        MOV R0, #191
+        ST  R0, [LINECMP]   ; interrupt at dot 256 of line 191
+        MOV R0, #2
+        ST  R0, [IE]        ; enable LINE (VBLANK etc. as the game needs)
+        EI
+        ...
+line_handler:
+        ST  R6, [BG0SCX]    ; starts well before dot 0 of line 192
+        ST  R6, [BG0SCY]
+        PUSH R0
+        MOV R0, #2
+        ST  R0, [IF]        ; acknowledge LINE
+        POP R0
+        RTI
+</pre>
+
+<p>The VBLANK handler restores BG0SCX and BG0SCY to the play-field scroll for the next frame.</p>
+
+<!-- ===================================================================== -->
+<h3 id="vid-registers">5.14 Video and DMA register reference</h3>
+
+<p>All registers are 16 bits wide. Bits not described read 0 and are ignored on writing, unless stated.
+"Latched" means sampled at dot 0 of each line (5.8).</p>
+
+<table class="regtable" id="vid-reg-table">
+<caption>Barndoor and DMA registers</caption>
+<tr><th>Address</th><th>Name</th><th>Access</th><th>Description</th></tr>
+<tr><td>F000</td><td>VADDR</td><td>rw</td><td>VRAM byte address for VDATA, bits 14–0; bit 0 is kept but not used: word access uses VADDR &amp; 7FFE, a byte access to F002 the byte at VADDR &amp; 7FFE and one to F003 the byte at VADDR | 1. Bit 15 reads 0.</td></tr>
+<tr><td>F002</td><td>VDATA</td><td>rw</td><td>VRAM word at VADDR; after each access VADDR += VINC, modulo 32 KiB. 2 extra cycles during active display.</td></tr>
+<tr><td>F004</td><td>VINC</td><td>rw</td><td>VADDR increment, bits 7–0. Reset value 2.</td></tr>
+<tr><td>F006</td><td>VCTRL</td><td>rw</td><td>Bit 0 display enable, bit 1 BG0 enable, bit 2 BG1 enable, bit 3 sprite enable, bit 4 light field enable. Reset value 0. Latched.</td></tr>
+<tr><td>F008</td><td>VSTAT</td><td>r</td><td>Bit 0 in vertical blank (lines 224–261); bit 1 sprite overflow (cleared by reading VSTAT); bit 2 probe ready (cleared by reading PROBE).</td></tr>
+<tr><td>F00A</td><td>VCOUNT</td><td>r</td><td>Current line 0–261, changes at dot 0.</td></tr>
+<tr><td>F00C</td><td>LINECMP</td><td>rw</td><td>LINE interrupt line, bits 8–0; IF bit 1 is set at dot 256 when VCOUNT = LINECMP. Reset value 511.</td></tr>
+<tr><td>F010</td><td>BG0SCX</td><td>rw</td><td>BG0 horizontal scroll, bits 8–0 (0–511). Latched.</td></tr>
+<tr><td>F012</td><td>BG0SCY</td><td>rw</td><td>BG0 vertical scroll, bits 7–0 (0–255). Latched.</td></tr>
+<tr><td>F014</td><td>BG1SCX</td><td>rw</td><td>BG1 horizontal scroll, bits 8–0. Latched.</td></tr>
+<tr><td>F016</td><td>BG1SCY</td><td>rw</td><td>BG1 vertical scroll, bits 7–0. Latched.</td></tr>
+<tr><td>F018</td><td>BG0MAP</td><td>rw</td><td>BG0 map base = value × 2048, bits 3–0. Reset value 12 (6000). Latched.</td></tr>
+<tr><td>F01A</td><td>BG1MAP</td><td>rw</td><td>BG1 map base = value × 2048, bits 3–0. Reset value 14 (7000). Latched.</td></tr>
+<tr><td>F01C</td><td>OAMADDR</td><td>rw</td><td>OAM byte address, bits 8–1 (bit 0 reads 0).</td></tr>
+<tr><td>F01E</td><td>OAMDATA</td><td>rw</td><td>OAM word at OAMADDR; then OAMADDR += 2, modulo 512 (byte accesses too). 2 extra cycles during active display.</td></tr>
+<tr><td>F020</td><td>CRAMADDR</td><td>rw</td><td>CRAM index, bits 8–0 (0–511).</td></tr>
+<tr><td>F022</td><td>CRAMDATA</td><td>rw</td><td>CRAM entry at CRAMADDR as 0000 RRRR GGGG BBBB; then CRAMADDR += 1, wrapping. Bits 15–12 read 0. 2 extra cycles during active display.</td></tr>
+<tr><td>F030</td><td>L0X</td><td>rw</td><td>Light 0 X, signed 10-bit, bits 9–0. Latched.</td></tr>
+<tr><td>F032</td><td>L0Y</td><td>rw</td><td>Light 0 Y, signed 10-bit, bits 9–0. Latched.</td></tr>
+<tr><td>F034</td><td>L0I</td><td>rw</td><td>Light 0 intensity, signed 4-bit, bits 3–0; 0 = off. Latched.</td></tr>
+<tr><td>F036</td><td>L0F</td><td>rw</td><td>Light 0 falloff bits 2–0, shape bits 5–4. Latched.</td></tr>
+<tr><td>F038</td><td>L1X</td><td>rw</td><td>Light 1 X, as L0X.</td></tr>
+<tr><td>F03A</td><td>L1Y</td><td>rw</td><td>Light 1 Y, as L0Y.</td></tr>
+<tr><td>F03C</td><td>L1I</td><td>rw</td><td>Light 1 intensity, as L0I.</td></tr>
+<tr><td>F03E</td><td>L1F</td><td>rw</td><td>Light 1 falloff and shape, as L0F.</td></tr>
+<tr><td>F040</td><td>L2X</td><td>rw</td><td>Light 2 X, as L0X.</td></tr>
+<tr><td>F042</td><td>L2Y</td><td>rw</td><td>Light 2 Y, as L0Y.</td></tr>
+<tr><td>F044</td><td>L2I</td><td>rw</td><td>Light 2 intensity, as L0I.</td></tr>
+<tr><td>F046</td><td>L2F</td><td>rw</td><td>Light 2 falloff and shape, as L0F.</td></tr>
+<tr><td>F048</td><td>L3X</td><td>rw</td><td>Light 3 X, as L0X.</td></tr>
+<tr><td>F04A</td><td>L3Y</td><td>rw</td><td>Light 3 Y, as L0Y.</td></tr>
+<tr><td>F04C</td><td>L3I</td><td>rw</td><td>Light 3 intensity, as L0I.</td></tr>
+<tr><td>F04E</td><td>L3F</td><td>rw</td><td>Light 3 falloff and shape, as L0F.</td></tr>
+<tr><td>F050</td><td>AMBIENT</td><td>rw</td><td>Ambient shade added to every lit pixel's sum, bits 2–0. Reset value 0. Latched.</td></tr>
+<tr><td>F052</td><td>FIXED</td><td>rw</td><td>Shade for unlit pixels and for all pixels while the light field is disabled, bits 2–0. Reset value 7. Latched.</td></tr>
+<tr><td>F054</td><td>PROBEX</td><td>rw</td><td>Probe column 0–255, bits 7–0. Latched.</td></tr>
+<tr><td>F056</td><td>PROBEY</td><td>rw</td><td>Probe line 0–223, bits 8–0 (224 and above never match). Latched.</td></tr>
+<tr><td>F058</td><td>PROBE</td><td>r</td><td>Probe result: bits 5–0 base index, bits 10–8 shade, bit 15 ready. Updated at dot 256 of the probe line; reading clears ready.</td></tr>
+<tr><td>F0E0</td><td>DMASRC</td><td>rw</td><td>DMA source CPU address, bits 15–1 (bit 0 reads 0); +2 per word, modulo 64 KiB.</td></tr>
+<tr><td>F0E2</td><td>DMADST</td><td>rw</td><td>DMA destination, all 16 bits: its low bits give the VRAM byte address, OAM byte address or CRAM index, by target; advances per word, modulo 64 KiB.</td></tr>
+<tr><td>F0E4</td><td>DMALEN</td><td>rw</td><td>Words to transfer (0 = none); counts down to 0.</td></tr>
+<tr><td>F0E6</td><td>DMACTL</td><td>w</td><td>Write to start: bits 1–0 target 1 VRAM, 2 OAM, 3 CRAM (0 = nothing). CPU stopped 4 + 2 × DMALEN cycles, or 4 + 4 × DMALEN if started during active display.</td></tr>
+</table>

@@ -1,0 +1,22 @@
+; SPDX-FileCopyrightText: 2026 rick-learns
+; SPDX-License-Identifier: Apache-2.0
+;
+; Tutorial 1 art: one 16x16 sprite, a lamp (converted by tools/art.ts at build time).
+; Pixel values pick colours 1-3 of the sprite's palette; '.' (0) is transparent.
+@sprite16 LAMP
+......1111......
+....11222211....
+...1223333221...
+..122333333221..
+.12233333333221.
+.12333333333321.
+122333333333322.
+123333333333332.
+123333333333332.
+122333333333322.
+.12333333333321.
+.12233333333221.
+..122333333221..
+...1223333221...
+....11222211....
+......1111......

@@ -1,0 +1,38 @@
+{
+  "name": "cyclorama-sdk",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The Avenell Cyclorama SDK: hardware specification, deterministic reference emulator, CYASM assembler, SCRIM compiler, SDK runtime and conformance suite for a 1987 console that never existed.",
+  "license": "Apache-2.0 AND CC-BY-4.0",
+  "repository": "github:rick-learns/cyclorama-sdk",
+  "engines": {
+    "node": "24.21.0"
+  },
+  "scripts": {
+    "doctor": "node --disable-warning=ExperimentalWarning tools/doctor.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --disable-warning=ExperimentalWarning tools/slot.ts 2 -- node --disable-warning=ExperimentalWarning tools/test-tier.ts all",
+    "test:fast": "node --disable-warning=ExperimentalWarning tools/test-tier.ts fast",
+    "test:browser": "node --disable-warning=ExperimentalWarning tools/slot.ts 2 -- node --disable-warning=ExperimentalWarning tools/test-tier.ts browser",
+    "test:slow": "node --disable-warning=ExperimentalWarning tools/test-tier.ts slow",
+    "scrim": "node --disable-warning=ExperimentalWarning tools/scrim.ts",
+    "asm": "node --disable-warning=ExperimentalWarning tools/asm.ts",
+    "manual": "node --disable-warning=ExperimentalWarning tools/build-manual.ts",
+    "conformance": "node --disable-warning=ExperimentalWarning tools/conformance.ts",
+    "player": "node --disable-warning=ExperimentalWarning tools/build-player.ts",
+    "coverage": "node --disable-warning=ExperimentalWarning tools/coverage.ts",
+    "golden": "node --disable-warning=ExperimentalWarning tools/golden-frames.ts",
+    "frame": "node --disable-warning=ExperimentalWarning tools/render-frame.ts",
+    "budget": "node --disable-warning=ExperimentalWarning tools/budget.ts",
+    "replay": "node --disable-warning=ExperimentalWarning tools/replay.ts",
+    "build:roms": "node --disable-warning=ExperimentalWarning tools/build-roms.ts",
+    "verify": "node --disable-warning=ExperimentalWarning tools/verify.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "esbuild": "0.28.2",
+    "playwright": "1.63.0",
+    "typescript": "5.9.3"
+  }
+}

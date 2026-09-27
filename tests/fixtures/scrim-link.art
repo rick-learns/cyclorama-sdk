@@ -1,0 +1,17 @@
+; SPDX-FileCopyrightText: 2026 rick-learns
+; SPDX-License-Identifier: Apache-2.0
+;
+; Test art for tests/scrim-link.test.ts: two 8x8 tiles and a palette (not a cartridge).
+; Every row of tile 0 is 0..7 (planes $55 $33 $0F); every row of tile 1 is 7..0 ($AA $CC $F0).
+@tiles RAMP
+0123456776543210
+0123456776543210
+0123456776543210
+0123456776543210
+0123456776543210
+0123456776543210
+0123456776543210
+0123456776543210
+
+@palette RAMP_PAL
+0=$112 $964 $533 $4A4 $FFF

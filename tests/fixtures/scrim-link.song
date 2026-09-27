@@ -1,0 +1,29 @@
+; SPDX-FileCopyrightText: 2026 rick-learns
+; SPDX-License-Identifier: Apache-2.0
+;
+; Test music for tests/scrim-link.test.ts: a SCRIM program LINKs the Cue Sound Driver and plays
+; this through EXTERN PROC calls (not a cartridge).
+instrument lead
+  wave pulse50
+  env 12 hold
+instrument bass
+  wave triangle
+  env 15 hold
+instrument ping
+  wave pulse25
+  env 14 hold
+
+pattern mel inst lead
+  C-5:2 E-5:2 G-5:2 C-6:2
+pattern low inst bass
+  C-3:4 G-2:4
+
+song tune
+  speed 6
+  voices 0 1
+  loop
+  order mel low
+
+; borrows the bass voice for a while; the lead plays on
+sfx ping voice 1 priority 1 speed 4 inst ping
+  C-6 G-6 C-7:8

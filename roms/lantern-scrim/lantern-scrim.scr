@@ -1,0 +1,121 @@
+-- SPDX-FileCopyrightText: 2026 rick-learns
+-- SPDX-License-Identifier: Apache-2.0
+--
+-- LANTERN (SCRIM edition): the M2 lantern-test cartridge rewritten in SCRIM.
+-- The stage cat walks a dark brick room with the D-pad; light 0 follows it.
+-- Its eyes are sprite 0 (flagged UNLIT, so they glow at the FIXED shade) and its body
+-- is sprite 1. Hold A for a wider lantern; pressing A plays A4 on voice 0.
+PROGRAM Lantern;
+HEADER title = "LANTERN SCRIM", dev = $0001, date = $19870918, version = $0100;
+
+CONST
+  PAD_UP = 1; PAD_DOWN = 2; PAD_LEFT = 4; PAD_RIGHT = 8; PAD_A = 16;
+  MAX_X = 240; MAX_Y = 208;
+  UNLIT = $8000; SPRITE_16 = 1;
+
+-- Base colours: BG palette 0 (floor, brick, mortar, moss) and sprite palette 0
+-- (cat body, highlight, eye, pupil). Every other colour is black.
+DATA bgColours: ARRAY [8] OF WORD = ($112, $964, $533, $4A4, 0, 0, 0, 0);
+DATA catColours: ARRAY [8] OF WORD = (0, $223, $446, $FD3, $210, 0, 0, 0);
+
+-- Tiles 1-9 (3 bits per pixel, planar): brick, cat (2-5), eyes (6-9).
+DATA tiles: ARRAY OF BYTE = (
+  $00, $EF, $EF, $EF, $00, $FE, $FE, $FE, $FF, $10, $10, $10,
+  $FF, $01, $41, $01, $00, $00, $00, $00, $00, $00, $00, $00,
+  $10, $30, $28, $3F, $7F, $7F, $7F, $3F, $00, $00, $10, $00,
+  $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00,
+  $08, $0C, $14, $FC, $FE, $FE, $FE, $FC, $00, $00, $08, $00,
+  $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00,
+  $1F, $3F, $7F, $7F, $7B, $7F, $3F, $38, $00, $00, $00, $00,
+  $04, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00,
+  $F8, $FC, $FE, $FE, $DE, $FF, $F3, $70, $00, $00, $00, $00,
+  $20, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00,
+  $00, $00, $00, $00, $00, $0C, $08, $00, $00, $00, $00, $00,
+  $00, $0C, $08, $00, $00, $00, $00, $00, $00, $00, $04, $00,
+  $00, $00, $00, $00, $00, $30, $10, $00, $00, $00, $00, $00,
+  $00, $30, $10, $00, $00, $00, $00, $00, $00, $00, $20, $00,
+  $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00,
+  $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00,
+  $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00,
+  $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00);
+
+VAR px, py: INT;         -- the cat's top-left corner
+    prev: WORD;          -- last frame's pad (for "newly pressed")
+    frames: WORD;
+
+FUNC clamp(v, lo, hi: INT): INT;
+BEGIN
+  IF v < lo THEN RETURN lo ELSIF v > hi THEN RETURN hi END;
+  RETURN v
+END;
+
+-- Eight shade planes, each a darker copy of the base colours (brightness shade/8).
+PROC loadPalette;
+VAR shade, c, col: WORD;
+BEGIN
+  CRAMADDR := 0;
+  FOR shade := 1 TO 8 DO
+    FOR c := 0 TO 63 DO
+      IF c < 8 THEN col := bgColours[c]
+      ELSIF (c >= 32) AND (c < 40) THEN col := catColours[c - 32]
+      ELSE col := 0
+      END;
+      CRAMDATA := (((col SHR 8) AND 15) * shade SHR 3) SHL 8
+               OR (((col SHR 4) AND 15) * shade SHR 3) SHL 4
+               OR ((col AND 15) * shade SHR 3)
+    END
+  END
+END;
+
+PROC fillMap;             -- BG0 map at 6000: brick everywhere
+VAR i: WORD;
+BEGIN
+  VADDR := $6000;
+  FOR i := 1 TO 2048 DO VDATA := 1 END
+END;
+
+INTERRUPT PROC onVblank;
+VAR pad, pressed: WORD;
+BEGIN
+  pad := PAD1;
+  IF (pad AND PAD_UP) <> 0 THEN py := py - 1 END;
+  IF (pad AND PAD_DOWN) <> 0 THEN py := py + 1 END;
+  IF (pad AND PAD_LEFT) <> 0 THEN px := px - 1 END;
+  IF (pad AND PAD_RIGHT) <> 0 THEN px := px + 1 END;
+  px := clamp(px, 0, MAX_X);
+  py := clamp(py, 0, MAX_Y);
+
+  OAMADDR := 0;                    -- sprite 0: eyes (unlit); the lower index wins overlaps
+  OAMDATA := WORD(py); OAMDATA := WORD(px); OAMDATA := 6 OR UNLIT; OAMDATA := SPRITE_16;
+  OAMDATA := WORD(py); OAMDATA := WORD(px); OAMDATA := 2; OAMDATA := SPRITE_16;
+
+  L0X := WORD(px + 8);             -- the lantern sits at the cat's centre
+  L0Y := WORD(py + 8);
+
+  pressed := pad AND NOT prev;
+  prev := pad;
+  IF (pressed AND PAD_A) <> 0 THEN V0FREQ := 601; V0CTRL := 1 END;   -- A4
+  IF (pad AND PAD_A) <> 0 THEN L0F := $25 ELSE L0F := $24 END;       -- wider while A is held
+  frames := frames + 1;
+  IF_PORT := 1
+END;
+
+VECTOR VBLANK := onVblank;
+
+BEGIN
+  loadPalette;
+  VRAM_COPY(24, @tiles, LEN(tiles) / 2);   -- tiles 1-9 at VRAM 0018
+  fillMap;
+  px := 120; py := 100;
+  AMBIENT := 1;
+  L0I := 6;                                -- AMBIENT 1 + 6 = 7: keep totals below 8
+  L0F := $24;                              -- falloff 4, octagon
+  MASTERVOL := 12;
+  V0WAVE := 2;                             -- pulse 50%
+  V0ENV := 12 OR (2 SHL 5);                -- volume 12, falling every 2 ticks
+  VCTRL := 1 OR 2 OR 8 OR 16;              -- display, BG0, sprites, light field
+  IF_PORT := 1;
+  IE := 1;
+  ASM EI END;
+  WHILE TRUE DO WAIT END
+END.

@@ -1,0 +1,59 @@
+-- SPDX-FileCopyrightText: 2026 rick-learns
+-- SPDX-License-Identifier: Apache-2.0
+--
+-- SDK library reference (docs/guide/sdk-library.md): calls every SCRIM runtime routine and the
+-- Cue Sound Driver's stack-convention entries with the inputs the page states, keeps the
+-- results in work RAM, then plays the song. tests/example-sdk-library.test.ts checks every result.
+PROGRAM SdkRuntime;
+HEADER title = "SDK RUNTIME", dev = $0000, date = $19870918, version = $0100;
+
+VAR SND_RAM: ARRAY [136] OF WORD;          -- the driver's RAM (272 bytes)
+LINK "../../roms/lib/cuesound.inc";
+ASSET "sdk-library.song";
+EXTERN PROC SndInit;
+EXTERN PROC SndPlaySong(song: WORD);
+EXTERN PROC SndSfx(sfx: WORD);
+EXTERN PROC SndTick;
+EXTERN FUNC SndStatus: WORD;
+EXTERN CONST SONG_tune: WORD; SFX_blip: WORD;
+
+DATA source: ARRAY [8] OF WORD = ($0123, $4567, $89AB, $CDEF, $1111, $2222, $3333, $4444);
+
+VAR a, b, q, r: WORD;
+    s, t, sq, sr: INT;
+    copy: ARRAY [8] OF WORD;
+    fill: ARRAY [6] OF BYTE;
+    rnd: ARRAY [3] OF WORD;
+    status, frames: WORD;
+
+INTERRUPT PROC onVblank;
+BEGIN
+  SndTick;                                 -- once per frame, first thing in VBLANK
+  frames := frames + 1;
+  IF_PORT := 1
+END;
+VECTOR VBLANK := onVblank;
+
+BEGIN
+  a := 1000; b := 7;
+  q := a / b;                              -- WORD: __divu, 142
+  r := a MOD b;                            -- 6
+  s := -1000; t := 7;
+  sq := s / t;                             -- INT: __divs, -142
+  sr := s MOD t;                           -- -6: the dividend's sign
+  MEMCPY(@copy[0], @source[0], 16);        -- 16 bytes, all even: the word path
+  MEMSET(@fill[0], $A5, 5);                -- fill[0..4] = A5, fill[5] stays 0
+  VRAM_COPY($0000, @source[0], 8);         -- 8 words to VRAM 0000
+  SEED_RANDOM(1987);
+  rnd[0] := RANDOM();
+  rnd[1] := RANDOM();
+  rnd[2] := RANDOM();
+  SndInit;
+  SndPlaySong(SONG_tune);
+  SndSfx(SFX_blip);
+  status := SndStatus();                   -- 4F: music on voices 0-3, the effect on voice 2
+  WAIT_VBLANK;                             -- the top of vertical blank
+  IE := 1;                                 -- the VBLANK raised at line 224 is pending:
+  ASM EI END;                              -- onVblank runs at once
+  WHILE TRUE DO WAIT END
+END.

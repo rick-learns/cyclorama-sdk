@@ -1,0 +1,50 @@
+; SPDX-FileCopyrightText: 2026 rick-learns
+; SPDX-License-Identifier: Apache-2.0
+;
+; Music for the SDK library examples (docs/guide/sdk-library.md): a looping song on all four
+; voices with a wavetable, a one-voice jingle that plays once, and two effects.
+instrument lead
+  wave pulse25
+  env 11 down 6
+instrument bass
+  wave triangle
+  env 12 hold
+instrument pad
+  wave wavetable
+  env 8 hold
+instrument hat
+  wave noise
+  env 6 down 1
+  fixed 40000
+instrument blipi
+  wave pulse50
+  env 12 down 2
+  slide 40
+
+pattern mel inst lead
+  C-5:2 E-5:2 G-5:2 E-5:2 | D-5:2 F-5:2 A-5:4
+pattern low inst bass
+  C-3:4 G-2:4 | D-3:4 A-2:4
+pattern chord inst pad
+  E-4:8 | F-4:8
+pattern beat
+  hat:2 hat:2 hat:2 hat:2 | hat:2 hat:2 hat:2 hat:2
+pattern ding inst lead
+  G-5:2 C-6:6
+
+song tune
+  speed 6
+  voices 0 1 2 3
+  wavetable 89ACDEEFFFEEDCA98653211000112356
+  loop
+  order mel low chord beat
+
+song jingle
+  speed 4
+  voices 0
+  order ding
+
+sfx blip voice 2 priority 1 speed 1 inst blipi
+  C-6:8
+sfx thud voice 3 priority 2 speed 2 inst hat
+  hat:6

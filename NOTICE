@@ -1,0 +1,25 @@
+Avenell Cyclorama — open platform components
+Copyright 2026 rick-learns
+
+This product includes software developed by rick-learns,
+licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The open specification text (the HED-0041 hardware and programmer's
+reference manual, the specification notes and the SCRIM language
+specification) is licensed under the Creative Commons Attribution 4.0
+International license (see LICENSES/CC-BY-4.0.txt).
+
+Not every file in this repository is open. LICENSING.md maps each path to
+its licence tier; first-party games, the official application, the
+archive/lore material and brand assets are all rights reserved.
+
+TRADEMARKS ARE NOT LICENSED. "Avenell", "Cyclorama", "Avenell Cyclorama",
+the Avenell and Cyclorama logos and wordmarks, the "Curtain Up" splash
+sequence and chime, and the "Official Cyclorama" designation are
+trademarks or trade dress of rick-learns. Neither the
+Apache License 2.0 (section 6) nor CC BY 4.0 (section 2(b)(2)) grants any
+right to use them. See TRADEMARKS.md for what is permitted.
+
+The Avenell Cyclorama is alternate-history fiction. Avenell Stagecraft Ltd.
+and every person, product, game and publication in its canon are invented;
+the console never existed as hardware.

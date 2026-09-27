@@ -1,0 +1,36 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="input">7 Controllers</h2>
+
+<p>The Cyclorama has 2 controller ports. Each standard pad has a four-way direction pad, three action buttons A, B and C, and START. The console reads both pads once per frame by itself; software never strobes or clocks the pads.</p>
+
+<h3 id="in-registers">PAD1 and PAD2</h3>
+<table class="ruled">
+<thead><tr><th>Register</th><th>Address</th><th>Access</th><th>Contents</th></tr></thead>
+<tbody>
+<tr><td><code>PAD1</code></td><td>F0C0</td><td>R</td><td>Controller in port 1</td></tr>
+<tr><td><code>PAD2</code></td><td>F0C2</td><td>R</td><td>Controller in port 2</td></tr>
+</tbody>
+</table>
+<p>Both registers have the same layout; a bit is 1 while its button is pressed:</p>
+<table class="ruled">
+<thead><tr><th>Bit</th><th>7</th><th>6</th><th>5</th><th>4</th><th>3</th><th>2</th><th>1</th><th>0</th></tr></thead>
+<tbody>
+<tr><td>Button</td><td>START</td><td>C</td><td>B</td><td>A</td><td>Right</td><td>Left</td><td>Down</td><td>Up</td></tr>
+<tr><td>Mask</td><td>0080</td><td>0040</td><td>0020</td><td>0010</td><td>0008</td><td>0004</td><td>0002</td><td>0001</td></tr>
+</tbody>
+</table>
+<p>Bits 15–8 read 0. A port with no controller connected reads 0000.</p>
+
+<h3 id="in-sampling">Sampling</h3>
+<p>Both ports are sampled at dot 0 of line 224, the same moment the VBLANK interrupt is requested, and the registers hold those values for the whole of the following frame: every read of PAD1 between one sample and the next returns the same value. A VBLANK handler that reads the pads therefore sees the freshest possible state, and a program that reads them several times in a frame gets consistent answers.</p>
+<p>In the reference model the only inputs to the machine are the ROM image, the initial cartridge-RAM contents and these controller samples: the host supplies the state of both controller ports for each frame, and it is sampled at this moment. The host supplies it as two bytes per frame, PAD1 then PAD2, each in the bit layout of the PAD registers above.</p>
+
+<h3 id="in-edges">Presses and releases</h3>
+<p>Most games act when a button goes down, not while it is held. Keep the previous frame's value and compare:</p>
+<pre>        LD      R0, [PAD1]      ; now
+        LD      R1, [PadLast]   ; last frame
+        ST      R0, [PadLast]
+        NOT     R1
+        AND     R1, R0          ; R1 = pressed this frame (was up, now down)</pre>
+<p>Releases are found the same way with the roles exchanged. The console reports exactly the bits it samples and does not exclude opposite directions: a program must behave sensibly if Up and Down, or Left and Right, are reported together (for example, by treating the pair as neither).</p>

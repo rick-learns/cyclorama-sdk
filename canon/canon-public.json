@@ -1,0 +1,352 @@
+{
+  "meta": {
+    "title": "Avenell Cyclorama canon registry: open extract",
+    "frozen": "2026-09-26",
+    "currencyFormat": "Prices are stored as integer cents with an ISO-like currency code (USD, CAD, GBP).",
+    "dateFormat": "ISO 8601 (YYYY-MM-DD, or YYYY-MM when the day is not canon).",
+    "note": "Generated from canon/canon.json by extractPublicCanon (tools/canon/lib.ts); never edit by hand. The hardware facts are CC BY 4.0; the names in it remain trademarks (TRADEMARKS.md)."
+  },
+  "core": {
+    "hardware": {
+      "clocks": {
+        "masterHz": "945000000/44",
+        "masterHzApprox": 21477272.73,
+        "cpuDivider": 6,
+        "cpuHzApprox": 3579545.45,
+        "dotDivider": 4,
+        "dotHzApprox": 5369318.18,
+        "audioDivider": 448,
+        "audioSampleHzApprox": 47940.34
+      },
+      "video_timing": {
+        "masterCyclesPerLine": 1368,
+        "dotsPerLine": 342,
+        "cpuCyclesPerLine": 228,
+        "linesPerFrame": 262,
+        "visibleLines": 224,
+        "visibleDots": 256,
+        "masterCyclesPerFrame": 358416,
+        "cpuCyclesPerFrame": 59736,
+        "refreshHzApprox": 59.9228
+      },
+      "cpu": {
+        "name": "Tally",
+        "part": "AV-1601",
+        "wordBits": 16,
+        "generalRegisters": 8,
+        "addressSpaceBytes": 65536,
+        "endianness": "little",
+        "clockDivider": 6
+      },
+      "video": {
+        "name": "Barndoor",
+        "part": "AV-2210",
+        "resolution": [
+          256,
+          224
+        ],
+        "vramBytes": 32768,
+        "tileLayers": 2,
+        "tileSize": [
+          8,
+          8
+        ],
+        "tileBitsPerPixel": 3,
+        "maxTiles": 1024,
+        "mapSizeTiles": [
+          64,
+          32
+        ],
+        "sprites": 64,
+        "spriteSizes": [
+          "8x8",
+          "16x16"
+        ],
+        "spritesPerLine": 16,
+        "palettes": {
+          "background": 4,
+          "sprite": 4,
+          "colorsPerPalette": 8,
+          "transparentIndex": 0
+        },
+        "baseColors": 64,
+        "shadePlanes": 8,
+        "cramEntries": 512,
+        "colorDepth": "12-bit RGB (4096 colours)",
+        "lights": 4
+      },
+      "audio": {
+        "name": "Cue",
+        "part": "AV-3105",
+        "toneVoices": 3,
+        "noiseVoices": 1,
+        "waveforms": [
+          "pulse (4 duty settings)",
+          "triangle",
+          "sawtooth",
+          "32-step 4-bit wavetable"
+        ],
+        "volumeBits": 4,
+        "envelope": "hardware linear volume envelope per voice",
+        "output": "mono",
+        "sampleRateDivider": 448
+      },
+      "memory": {
+        "workRamBytes": 16384,
+        "romWindowBytes": 16384,
+        "maxRomBanks": 256,
+        "maxCartridgeRomBytes": 4194304,
+        "cartridgeRamBytes": 8192
+      },
+      "input": {
+        "ports": 2,
+        "buttons": [
+          "Up",
+          "Down",
+          "Left",
+          "Right",
+          "A",
+          "B",
+          "C",
+          "START"
+        ]
+      },
+      "interrupts": [
+        "VBLANK",
+        "LINE",
+        "TIMER"
+      ]
+    },
+    "signatureBehavior": {
+      "id": "light-field",
+      "name": "the light field",
+      "marketingName": "Stagelight",
+      "chip": "Barndoor",
+      "summary": "Every lit pixel's colour is chosen from one of eight shade planes. The shade is computed in hardware from four positioned lights and an ambient level by a 3-bit adder that wraps. A probe latch reports the shade and base colour the beam produced at one chosen pixel.",
+      "rule": {
+        "lights": 4,
+        "perLightRegisters": [
+          "X (signed 10-bit)",
+          "Y (signed 10-bit)",
+          "intensity I (signed 4-bit, -8..7)",
+          "falloff F (0..7)",
+          "shape (diamond, square, octagon, band)"
+        ],
+        "distance": {
+          "diamond": "dx + dy",
+          "square": "max(dx, dy)",
+          "octagon": "max(dx, dy) + (min(dx, dy) >> 1)",
+          "band": "dy"
+        },
+        "level": "sign(I) * max(0, |I| - (d >> F))",
+        "shade": "(AMBIENT + sum of the four levels) mod 8",
+        "color": "CRAM[shade * 64 + palette * 8 + pixel]",
+        "unlit": "tiles and sprites flagged unlit use the FIXED shade register instead of the computed shade",
+        "latching": "light registers are sampled at the start of each scanline and hold for that line",
+        "probe": "when the beam outputs the pixel at (PX, PY) the chip latches that pixel's shade and base colour index and sets a ready flag"
+      },
+      "techniques": [
+        {
+          "id": "lantern",
+          "name": "Lantern",
+          "era": "1987",
+          "description": "Shade planes filled with darkening ramps; one light follows the player through an ambient dark. Documented in the launch development kit."
+        },
+        {
+          "id": "gel-swap",
+          "name": "Gel swap",
+          "era": "1989",
+          "description": "Shade planes filled with unrelated colours so that light recolours instead of brightening: hidden ink visible only when lit, colour washes and X-ray effects."
+        },
+        {
+          "id": "flying",
+          "name": "Flying",
+          "era": "1990-1991",
+          "description": "Rewriting light registers from the LINE interrupt so each band of the screen sees different lights: more than four lights, and per-line shapes such as flames, beams and roads drawn with no tile memory."
+        },
+        {
+          "id": "overdrive",
+          "name": "Overdrive",
+          "era": "1992",
+          "description": "Deliberately overflowing the 3-bit shade adder so overlapping lights wrap into contour rings and faceted interference patterns."
+        },
+        {
+          "id": "follow-spot",
+          "name": "Follow-spot",
+          "era": "1993-1994",
+          "description": "Moving the probe (and lights) mid-frame to use the light field as a coprocessor: hardware distance and visibility queries for game logic."
+        }
+      ]
+    },
+    "cartridgeGenerations": [
+      {
+        "id": "standard",
+        "name": "Standard cartridge",
+        "introduced": "1987-09-18",
+        "romBytes": [
+          32768,
+          262144
+        ],
+        "saveRam": false
+      },
+      {
+        "id": "deep",
+        "name": "Deep cartridge",
+        "introduced": "1990-10",
+        "romBytes": [
+          524288,
+          1048576
+        ],
+        "saveRam": true,
+        "note": "larger ROM board with optional 8 KiB battery-backed RAM; uses the same bank-switching scheme as Standard cartridges"
+      }
+    ],
+    "developmentKit": {
+      "name": "Cyclorama Development Kit",
+      "language": {
+        "name": "SCRIM",
+        "author": "priya-venkataraman",
+        "released": "1987-03",
+        "description": "a small structured, compiled language for the Tally CPU"
+      }
+    },
+    "console": {
+      "models": [
+        {
+          "id": "CY-1",
+          "introduced": "1987-09-18",
+          "note": "launch model"
+        },
+        {
+          "id": "CY-2",
+          "introduced": "1990-06",
+          "note": "cost-reduced board revision; programmer-visible hardware identical to CY-1"
+        }
+      ]
+    },
+    "products": [
+      {
+        "id": "wickline-512",
+        "name": "Wickline 512",
+        "kind": "memory lighting control console for theatres",
+        "released": "1981-03",
+        "note": "its fade-engine gate array computed crossfades for 512 dimmer channels; the ancestor of the light field"
+      }
+    ],
+    "people": [
+      {
+        "id": "priya-venkataraman",
+        "name": "Priya Venkataraman",
+        "born": 1960
+      }
+    ]
+  },
+  "extended": {},
+  "denylist": {
+    "description": "Real-world names that must never appear in the fictional canon or in shipped fictional artifacts. Case-sensitive whole-word match; ambiguous dictionary words are listed only in their unambiguous brand form.",
+    "terms": [
+      "Nintendo",
+      "Famicom",
+      "Super Famicom",
+      "Game Boy",
+      "Virtual Boy",
+      "Super NES",
+      "SNES",
+      "Sega",
+      "Mega Drive",
+      "Master System",
+      "Game Gear",
+      "Dreamcast",
+      "Sony",
+      "PlayStation",
+      "Atari",
+      "Commodore",
+      "Amiga",
+      "C64",
+      "NEC",
+      "TurboGrafx",
+      "PC Engine",
+      "SNK",
+      "Neo Geo",
+      "3DO",
+      "CD-i",
+      "Philips",
+      "Coleco",
+      "ColecoVision",
+      "Intellivision",
+      "Mattel",
+      "Vectrex",
+      "Magnavox",
+      "Konami",
+      "Capcom",
+      "Namco",
+      "Taito",
+      "Hudson",
+      "Tecmo",
+      "Activision",
+      "Electronic Arts",
+      "Ubisoft",
+      "Codemasters",
+      "Ocean Software",
+      "Mario",
+      "Zelda",
+      "Sonic",
+      "Pac-Man",
+      "Tetris",
+      "Donkey Kong",
+      "Mega Man",
+      "Castlevania",
+      "Metroid",
+      "Z80",
+      "6502",
+      "65816",
+      "68000",
+      "Motorola",
+      "Zilog",
+      "MOS Technology",
+      "Yamaha",
+      "Nintendo Power",
+      "GamePro",
+      "Electronic Gaming Monthly",
+      "Famitsu",
+      "Mean Machines",
+      "Computer and Video Games",
+      "Game Informer",
+      "Nintendo Magazine",
+      "Toys R Us",
+      "Blockbuster",
+      "Walmart",
+      "Sears",
+      "Radio Shack",
+      "Tandy",
+      "IBM",
+      "Microsoft",
+      "Walkman",
+      "Game Genie",
+      "Galoob",
+      "UFO 50",
+      "PICO-8",
+      "TIC-80",
+      "Sega Saturn",
+      "Atari Lynx",
+      "Atari Jaguar",
+      "Apple II",
+      "Macintosh",
+      "Squaresoft",
+      "Square Enix",
+      "Magnavox Odyssey",
+      "Intel 8080",
+      "8086",
+      "Irem Corporation",
+      "Enix Corporation",
+      "Game & Watch",
+      "Pong",
+      "Space Invaders",
+      "Galaga",
+      "Street Fighter",
+      "Mortal Kombat",
+      "Final Fantasy",
+      "Dragon Quest"
+    ]
+  }
+}

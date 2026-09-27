@@ -1,0 +1,145 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="assembler">8 The CYASM assembler</h2>
+
+<p>CYASM is the Tally assembler supplied in the Cyclorama Development Kit. It reads one or more source files and writes a complete cartridge ROM image, a symbol table and a listing. (The kit's structured language, SCRIM, is described in its own documentation.) This chapter defines the language completely: a source text either assembles to exactly one ROM image or is rejected with an error. The worked examples in chapter 9 are all valid CYASM.</p>
+
+<h3 id="asm-lines">Source lines</h3>
+<p>A source file is a sequence of lines, each holding at most one statement:</p>
+<pre>[label:]  [mnemonic or directive  [operands]]  [; comment]</pre>
+<ul>
+<li>A semicolon starts a comment that runs to the end of the line (except inside a character or string constant).</li>
+<li>Mnemonics, the register names (<code>R0</code>–<code>R7</code>, <code>SP</code>), the predefined I/O register names and directives are not case-sensitive: <code>mov r0,#1</code> and <code>MOV R0,#1</code> are the same, and so are <code>st r0,[vctrl]</code> and <code>ST R0,[VCTRL]</code>. User-defined symbols are case-sensitive: <code>Score</code> and <code>SCORE</code> are different symbols.</li>
+<li>A symbol is a letter or underscore followed by any number of letters, digits and underscores; a local label adds a leading period.</li>
+<li>Operands are separated by commas; spaces around operands are ignored.</li>
+</ul>
+
+<h3 id="asm-symbols">Labels, local labels and constants</h3>
+<ul>
+<li><strong>Labels.</strong> <code>name:</code> at the start of a statement (spaces before it are allowed) defines <code>name</code> as the current address. A label may stand alone on its line or precede a statement. A label on the same line as .org, .align or .bank takes the address after the directive: <code>Top: .org $200</code> makes Top 0200, and <code>Far: .bank 3</code> gives Far bank 3's location counter (4000 the first time). On any other line a label takes the address at which the statement starts. .header never moves a location counter, so a label on a <code>.header</code> line takes the current address like any other.</li>
+<li><strong>Local labels</strong> start with a period, for example <code>.loop:</code>. A local label is scoped to the most recent non-local label: <code>.loop</code> after <code>Clear:</code> and <code>.loop</code> after <code>Copy:</code> are different symbols, listed in the symbol table as <code>Clear.loop</code> and <code>Copy.loop</code>. References to a local label resolve within the same scope. A local label before any non-local label is an error.</li>
+<li><strong>Constants.</strong> <code>name = expr</code> or <code>name .equ expr</code> defines a constant. A constant definition cannot carry a label on the same line.</li>
+<li><strong>One definition only.</strong> Defining a symbol twice, as a label or as a constant, is an error; a name cannot be both a label and a constant. The register names (<code>R0</code>–<code>R7</code>, <code>SP</code>) and the predefined I/O register names cannot be defined in any mixture of capitals and small letters: <code>vctrl = 5</code> is an error, just as <code>VCTRL = 5</code> is.</li>
+<li><strong>Predefined symbols.</strong> Every I/O register name in this manual (<code>VCTRL</code>, <code>IF</code>, <code>BANK</code>, <code>L0X</code> …) is predefined as its address, and may be written in capitals or small letters. The full list is the register summary appendix.</li>
+</ul>
+
+<h3 id="asm-exprs">Numbers and expressions</h3>
+<table class="ruled">
+<thead><tr><th>Form</th><th>Example</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Decimal</td><td><code>100</code></td><td>100</td></tr>
+<tr><td>Hexadecimal</td><td><code>$1F</code>, <code>0x1F</code></td><td>31</td></tr>
+<tr><td>Binary</td><td><code>%1010</code></td><td>10</td></tr>
+<tr><td>Character</td><td><code>'A'</code>, <code>'\n'</code></td><td>65, 10: exactly one character or one escape (<a class="xref" href="#asm-strings"></a>)</td></tr>
+<tr><td>Current address</td><td><code>*</code></td><td>the address at which the current statement starts</td></tr>
+</tbody>
+</table>
+<p>A numeric literal whose value does not fit in 32 bits (taken as unsigned, 0…4,294,967,295) is an error: <code>$100000000</code> and <code>4294967296</code> are rejected, not wrapped to 0. <code>$FFFFFFFF</code> is accepted and is the value −1.</p>
+<p>Expressions combine numbers and symbols with parentheses and the following operators, with the precedence of the C language (highest first):</p>
+<table class="ruled">
+<thead><tr><th>Precedence</th><th>Operators</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>1 (unary)</td><td><code>-</code> <code>~</code> <code>&lt;</code> <code>&gt;</code></td><td>negate; complement; low byte (<code>&lt;expr</code> = expr &amp; 255); high byte (<code>&gt;expr</code> = (expr &gt;&gt; 8) &amp; 255)</td></tr>
+<tr><td>2</td><td><code>*</code> <code>/</code> <code>%</code></td><td>multiply, divide, remainder</td></tr>
+<tr><td>3</td><td><code>+</code> <code>-</code></td><td>add, subtract</td></tr>
+<tr><td>4</td><td><code>&lt;&lt;</code> <code>&gt;&gt;</code></td><td>shift left, shift right</td></tr>
+<tr><td>5</td><td><code>&amp;</code></td><td>bitwise AND</td></tr>
+<tr><td>6</td><td><code>^</code></td><td>bitwise exclusive OR</td></tr>
+<tr><td>7</td><td><code>|</code></td><td>bitwise OR</td></tr>
+</tbody>
+</table>
+<p>So <code>2+3*4</code> is 14 and <code>1&lt;&lt;4|1</code> is 17. Immediate operands are written <code>#expr</code>. The unary <code>&lt;</code> and <code>&gt;</code> bind as tightly as unary minus: <code>&gt;Table+1</code> is the high byte of Table, plus 1.</p>
+<p>The characters <code>*</code> and <code>%</code> each have two meanings, told apart by position. Where a value is expected, * is the current address and % begins a binary number; between two values they are multiply and remainder. So <code>*+2</code> is two bytes past the start of the statement, <code>2*%10</code> is 4 and <code>7%4</code> is 3.</p>
+<p><strong>Arithmetic.</strong> Every value is a 32-bit two's complement integer, and every operation wraps modulo 2^32 (4,294,967,296). For the operators whose results differ between machines:</p>
+<ul>
+<li>/ truncates toward zero, and % takes the sign of the dividend: <code>-7/2</code> is −3, <code>-7%2</code> is −1 and <code>7%-2</code> is 1. Division or remainder by zero is an error.</li>
+<li><code>&lt;&lt;</code> and <code>&gt;&gt;</code> use the shift count &amp; 31, so <code>1&lt;&lt;33</code> is 2. &gt;&gt; is arithmetic: copies of the sign bit enter from the left, so <code>-16&gt;&gt;2</code> is −4.</li>
+</ul>
+<p>The finished value is then checked against the field it is placed in (<a class="xref" href="#asm-operands"></a>, <a class="xref" href="#asm-directives"></a>). CYASM never truncates a value silently.</p>
+
+<h3 id="asm-strings">Strings and character constants</h3>
+<p>Strings are written in double quotes (<code>"text"</code>) and character constants in single quotes. Both may contain the printable ASCII characters 20–7E and these escapes:</p>
+<table class="ruled">
+<thead><tr><th>Escape</th><th>Byte</th></tr></thead>
+<tbody>
+<tr><td><code>\\</code></td><td>5C, a backslash</td></tr>
+<tr><td><code>\"</code></td><td>22, a double quote</td></tr>
+<tr><td><code>\'</code></td><td>27, a single quote</td></tr>
+<tr><td><code>\n</code></td><td>0A, new line</td></tr>
+<tr><td><code>\0</code></td><td>00</td></tr>
+<tr><td><code>\xHH</code></td><td>the byte HH, given as two hexadecimal digits</td></tr>
+</tbody>
+</table>
+<p>Any other escape or character is an error. A character constant holds exactly one character or escape: <code>'AB'</code> is an error.</p>
+
+<h3 id="asm-operands">Instruction syntax</h3>
+<p>Registers are <code>R0</code>–<code>R7</code> and <code>SP</code>. The instruction reference gives the syntax of every form; in summary:</p>
+<table class="ruled">
+<thead><tr><th>Syntax</th><th>Assembles to</th></tr></thead>
+<tbody>
+<tr><td><code>op Rd, Rs</code></td><td>ALU register form (group 1): MOV ADD ADC SUB SBC CMP AND OR XOR TST SHL SHR ASR ROL MUL FMUL</td></tr>
+<tr><td><code>op Rd, #n</code></td><td>ALU immediate form (group 2), n = −32768…65535, except as below</td></tr>
+<tr><td><code>MOV Rd, #n</code>, <code>ADD Rd, #n</code></td><td>MOVQ / ADDQ (one word) when n is known in pass 1 and, taken as a 32-bit value, lies in −128…127; the group 2 form when n lies in 128…65535 or −32768…−129, or is not known in pass 1; any other value is an error</td></tr>
+<tr><td><code>MOVQ Rd, #n</code>, <code>ADDQ Rd, #n</code></td><td>always the quick form; n = −128…127</td></tr>
+<tr><td><code>MOVW Rd, #n</code>, <code>ADDW Rd, #n</code>; a <code>W</code> suffix on any ALU mnemonic (<code>CMPW</code>, <code>ANDW</code> …)</td><td>always the two-word group 2 form</td></tr>
+<tr><td><code>SHL Rd, #n</code> (also SHR, ASR, ROL), n = 1…16</td><td>the group 0 shift-by-immediate form; any other count is an error</td></tr>
+<tr><td><code>SHLW Rd, #n</code> (also SHRW, ASRW, ROLW), n = 0…15</td><td>the group 2 shift form; the processor uses only n &amp; 15, so any other count is an error</td></tr>
+<tr><td><code>SHL Rd, Rs</code> (also SHR, ASR, ROL)</td><td>the group 1 form</td></tr>
+<tr><td><code>LD Rd, [Rs]</code>, <code>LD Rd, [Rs+expr]</code>, <code>LD Rd, [Rs-expr]</code></td><td>short form (group 4) when the displacement is known in pass 1 and lies in 0…126; otherwise group 8 mode 00 with a 16-bit displacement, which wraps: <code>[R1-4]</code> has displacement FFFC. An odd displacement is an error (see below); it never selects the long form</td></tr>
+<tr><td><code>LDX Rd, [Rs+expr]</code> (also STX, LDBX, STBX)</td><td>always group 8 mode 00; LDX and STX also reject an odd displacement</td></tr>
+<tr><td><code>LD Rd, [expr]</code></td><td>absolute (group 8 mode 01)</td></tr>
+<tr><td><code>LD Rd, [Rs]+</code>, <code>LD Rd, -[Rs]</code></td><td>post-increment, pre-decrement (group 8 modes 10, 11)</td></tr>
+<tr><td><code>LD Rd, [SP+expr]</code></td><td>stack relative (group 9); the displacement must be even and 0…510</td></tr>
+<tr><td><code>ST Rs, [...]</code></td><td>stores: the register to store comes first, then the same address forms as LD</td></tr>
+<tr><td><code>LDB</code>, <code>STB</code></td><td>as LD and ST; the short form takes displacements 0…63; there is no [SP+d] byte form</td></tr>
+<tr><td><code>BRA</code>, <code>BEQ</code> … <code>BLE</code>, <code>BSR</code>, <code>BCS</code>, <code>BCC</code> <code>label</code></td><td>branches; an error if the target is out of range or an odd number of bytes away</td></tr>
+<tr><td><code>JMP label</code>, <code>CALL label</code></td><td>absolute (group B)</td></tr>
+<tr><td><code>JMP [Rd]</code>, <code>CALL [Rd]</code></td><td>register jump and call (JMPR, CALLR)</td></tr>
+<tr><td><code>JMPT Rd, table</code></td><td>table jump</td></tr>
+<tr><td><code>PUSH Rd</code>, <code>POP Rd</code></td><td>single register</td></tr>
+<tr><td><code>PUSHM R0, R3-R5</code>, <code>POPM …</code></td><td>register lists: registers and ascending ranges separated by commas</td></tr>
+<tr><td><code>ADD SP, #n</code></td><td>ADDSP; n even, −256…254</td></tr>
+<tr><td><code>MOV Rd, SP</code>, <code>MOV SP, Rd</code></td><td>MOVFS, MOVTS</td></tr>
+<tr><td><code>GETF Rd</code>, <code>SETF Rd</code>, <code>TRAP #n</code></td><td>flags and trap; TRAP takes n = 0…15</td></tr>
+<tr><td><code>NOP STOP WAI RTS RTI EI DI</code></td><td>zero-operand instructions</td></tr>
+<tr><td><code>NOT NEG INC DEC SXB ZXB SWPB Rd</code></td><td>one-register instructions</td></tr>
+</tbody>
+</table>
+<p>So <code>MOV R0, #$FFFF</code> assembles to the long form, 2000 FFFF, because $FFFF is the number 65535, while <code>MOV R0, #-1</code> assembles to MOVQ, 30FF; both load FFFF. To get the quick form for a negative constant, write it as a negative number.</p>
+<p><strong>Known in pass 1.</strong> CYASM reads the source twice. The first pass fixes the size of every statement, so each choice between a short and a long form uses only values known in pass 1. A value is known in pass 1 if every symbol it uses was defined on an earlier line by a value that was itself known in pass 1. Numbers, <code>*</code> and the predefined register names are always known. A forward reference is not known, and neither is a constant defined above the statement from a forward label: with <code>X = Later + 1</code> above it, where Later is a label further down, <code>MOV R0, #X</code> takes the long form. The operands of <code>.org</code>, <code>.bank</code>, <code>.align</code> and <code>.rom</code>, and the count of <code>.fill</code>, must be known in pass 1; otherwise the statement is an error.</p>
+<p><strong>Errors.</strong> Every value must fit the field it is placed in; anything else is an error; there is no silent truncation. Among the cases this covers: <code>SHL Rd, #0</code> and <code>SHL Rd, #17</code>; <code>SHLW Rd, #16</code>; <code>TRAP #16</code>; an odd or too large stack displacement such as <code>LD R0, [SP+3]</code> or <code>LD R0, [SP+512]</code>; an odd <code>ADD SP, #n</code>; and an immediate outside −32768…65535. An instruction at an odd address is an error.</p>
+<p><strong>16-bit fields.</strong> Every 16-bit field accepts −32768…65535 and stores the value modulo 65536: an immediate, the displacement of <code>[Rs+expr]</code>, the address of <code>[expr]</code>, the target of JMP and CALL, the table address of JMPT, and every <code>.word</code> value. Any other value is an error. So <code>LD R0, [-2]</code> reads the word at FFFE and <code>JMP $FFFF</code> is accepted, while <code>JMP $10000</code> and <code>LD R0, [R1+$12345]</code> are errors. At run time the [Rs+d16] addition wraps at 16 bits, as every address calculation does.</p>
+<p><strong>Odd word displacements.</strong> For LD and ST an odd displacement is an error in every form: the short form, the [Rs+d16] form (including LDX and STX) and the [SP+d] form. So <code>LD R0, [R1+3]</code>, <code>LD R0, [R1+301]</code> and <code>LD R0, [SP+3]</code> are all errors. An odd displacement never selects the long form, and a displacement that is not known until pass 2 and then proves odd is an error in the same way. The byte instructions LDB and STB accept odd displacements.</p>
+
+<h3 id="asm-directives">Directives</h3>
+<p>Assembly starts in bank 0 at address 0000. Each bank has its own location counter, which starts at the beginning of the bank's window: 0000 for bank 0 and 4000 for every other bank.</p>
+<p>Emitting code or data past the end of the current bank's window (3FFF for bank 0, 7FFF for the others) is an error, whether by an instruction, <code>.word</code>, <code>.byte</code>, <code>.fill</code>, <code>.incbin</code> or a string. Output never spills into another bank or wraps to the start of the window: a <code>.word</code> at 3FFF, or two NOPs after <code>.org $3FFE</code>, is rejected. (The location counter itself may reach the end of the window, for instance after <code>.align</code>; only emitting a byte there is an error.)</p>
+<table class="ruled">
+<thead><tr><th>Directive</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>.org expr</code></td><td>Set the assembly address within the current bank. An address outside the current bank's window is an error (bank 0: 0000–3FFF; other banks: 4000–7FFF). <code>.org</code> may move backwards, but emitting a byte at an address where one has already been emitted is an error.</td></tr>
+<tr><td><code>.bank n</code></td><td>Switch output to ROM bank n, 0–255. <code>.bank n</code> resumes bank n's own location counter where output to that bank last stopped (at the start of its window the first time). Bank 0 assembles at addresses 0000–3FFF; every other bank at 4000–7FFF, its window address.</td></tr>
+<tr><td><code>.word e, …</code></td><td>Emit 16-bit little-endian words. <code>.word</code> values must lie in −32768…65535. A <code>.word</code> at an odd address is allowed and emitted there: it occupies that byte and the next.</td></tr>
+<tr><td><code>.byte e, …</code></td><td>Emit bytes. <code>.byte</code> values must lie in −128…255. An operand may also be a string, which emits its characters.</td></tr>
+<tr><td><code>.ascii "text"</code></td><td>Emit the characters of the string.</td></tr>
+<tr><td><code>.asciz "text"</code></td><td>Emit the characters followed by a 0 byte.</td></tr>
+<tr><td><code>.fill count[, value]</code></td><td>Emit count copies of a byte value; count 0…16384. The value defaults to 0. The <code>.fill</code> value must lie in −128…255.</td></tr>
+<tr><td><code>.align n</code></td><td>Advance the address to the next multiple of n, which must be a power of two from 1 to 16384. The bytes skipped are not written, so they stay FF unless another statement writes them.</td></tr>
+<tr><td><code>.include "file"</code></td><td>Assemble another source file at this point.</td></tr>
+<tr><td><code>.incbin "file"</code></td><td>Emit the bytes of a binary file.</td></tr>
+<tr><td><code>.header title="…", dev=$xxxx, date=$YYYYMMDD, version=$0100, ram=0|1, generation=0|1</code></td><td>Fill the cartridge header at 0010–003F: magic, header version 1, the given fields, and the ROM size and checksum computed from the finished image. Every field is optional; the defaults are title all spaces, dev 0, date 0, version 0, ram 0, generation 0. A title longer than 24 characters is an error. The title must be printable ASCII, 20–7E, after escapes are processed: <code>title="A\x80"</code> and <code>title="A\0"</code> are errors. The date and version must be valid BCD. The directive writes every byte of 0010–003F: the reserved bytes 003A–003F are written as 0, never left FF. The size byte and the checksum are computed last, over the whole image. <code>.header</code> may appear only once. It writes at fixed addresses in bank 0, so .header never moves a location counter.</td></tr>
+<tr><td><code>.rom n</code></td><td>Total ROM size in banks: n must be a power of two from 1 to 256 and at least the highest bank used + 1; any other value is an error. The highest bank used is the highest bank selected by .bank or containing any emitted byte. Without <code>.rom</code> the size is the highest bank used + 1, rounded up to a power of two, minimum 2 (32 KiB, the smallest retail cartridge): so a <code>.bank 5</code> alone, with nothing emitted to bank 5, makes the default size 8 banks. <code>.rom 1</code> gives a 16 KiB image for development and test boards.</td></tr>
+</tbody>
+</table>
+<p>File names in <code>.include</code> and <code>.incbin</code> are resolved relative to the file that contains the directive, not the directory CYASM was started in. A file that includes itself, directly or through other files, is an error.</p>
+<p>For example, a header for a 32 KiB Standard cartridge:</p>
+<pre>        .header title="EXAMPLE", dev=$0000, date=$19870918, version=$0100, ram=0, generation=0</pre>
+
+<h3 id="asm-output">Output</h3>
+<p>CYASM writes:</p>
+<ul>
+<li>a ROM image of the size set by <code>.rom</code>, in which every byte not written by the program is FF (<code>.header</code> writes all of 0010–003F, its reserved bytes as 0);</li>
+<li>a symbol table of every label and constant with its value; for a label it gives the bank as well as its address, for use by debuggers;</li>
+<li>a listing showing each source line with its bank, its address and the words it produced, in the style of the listings in chapter 9.</li>
+</ul>
+<p>Assembly is a pure function of the source files: the same sources always produce the same image, byte for byte, on any development system. Only the ROM image is defined to the byte; the layout of the listing and of the symbol table is for the programmer's convenience and may change between releases of the kit.</p>

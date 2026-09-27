@@ -1,0 +1,74 @@
+; SPDX-FileCopyrightText: 2026 rick-learns
+; SPDX-License-Identifier: Apache-2.0
+;
+; Test songs and effects for tests/cuesound.test.ts (not a cartridge).
+instrument plain
+  wave pulse50
+  env 10 hold
+instrument arpy
+  wave pulse12
+  env 10 hold
+  arp 0 4 7
+instrument wobble
+  wave triangle
+  env 10 hold
+  vibrato 16 32 delay 4
+instrument riser
+  wave saw
+  env 10 hold
+  slide 100
+instrument faller
+  wave saw
+  env 10 hold
+  slide -2000
+instrument tick
+  wave noise
+  env 8 down 1
+  fixed 40000
+instrument wav
+  wave wavetable
+  env 10 hold
+
+pattern p0 inst plain
+  C-4:4 off:4
+pattern p1 inst plain
+  E-4:8
+pattern parp inst arpy
+  C-4:8
+pattern pvib inst wobble
+  A-4:8
+pattern prise inst riser
+  A-4:8
+pattern pfall inst faller
+  C-5:8
+pattern pnoise
+  tick:4 tick:4
+
+; one step, no loop: plays 8 rows and ends
+song honce
+  speed 2
+  voices 0 1
+  order p0 p1
+
+song hfx
+  speed 2
+  voices 0 1 2 3
+  order parp pvib prise pnoise
+  loop
+  order parp pvib pfall pnoise
+
+song hwave
+  speed 4
+  voices 2
+  wavetable 8 9 A C D E E F F F E E D C A 9 8 6 5 3 2 1 1 0 0 0 1 1 2 3 5 6
+  order pnoise1
+
+pattern pnoise1
+  C-4@wav:8
+
+sfx hi voice 2 priority 5 inst plain
+  C-6:30
+sfx lo voice 2 priority 1 inst plain
+  C-4:30
+sfx hi2 voice 2 priority 5 inst plain
+  G-6:30

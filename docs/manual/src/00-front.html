@@ -1,0 +1,41 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<div class="titlepage">
+<p class="docno">Document HED-0041 · Revision A · March 1987</p>
+<h1>Cyclorama Hardware &amp; Programmer's Reference</h1>
+<p class="sub">The Tally processor, the Barndoor video chip, the Cue audio chip, cartridges, controllers and the CYASM assembler</p>
+<table class="ruled" style="max-width:34rem">
+<tbody>
+<tr><td>Document number</td><td><code>HED-0041</code></td></tr>
+<tr><td>Revision</td><td>A (first issue)</td></tr>
+<tr><td>Issued</td><td>March 1987, with the Cyclorama Development Kit</td></tr>
+<tr><td>Applies to</td><td>Avenell Cyclorama console, model CY-1; Tally AV-1601, Barndoor AV-2210, Cue AV-3105</td></tr>
+<tr><td>Issued by</td><td>Avenell Stagecraft Ltd., Home Entertainment Division, Toronto, Ontario, Canada</td></tr>
+</tbody>
+</table>
+
+<div class="boxed">
+<p><strong>Licensed developers only.</strong> This manual is furnished to licensed developers of the Avenell Cyclorama under their developer licence agreement with Avenell Stagecraft Ltd. It contains confidential information. It may be copied only for use by the licensee's own staff working on Cyclorama software, and it may not be disclosed to any other party. Cartridges for the Cyclorama may be manufactured only by or with the written approval of Avenell Stagecraft Ltd.</p>
+<p>Avenell Stagecraft Ltd. reserves the right to change the specifications in this manual. Changes are issued as numbered change notices; file each notice with this manual and record it in the table below.</p>
+</div>
+
+<h2 class="unnumbered" id="front-revisions">Record of revisions</h2>
+<table class="ruled">
+<thead><tr><th>Revision</th><th>Date</th><th>Pages affected</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>A</td><td>March 1987</td><td>all</td><td>First issue, shipped with the Cyclorama Development Kit.</td></tr>
+<tr><td>Change notice 1</td><td>June 1990</td><td>none</td><td>Model CY-2 console. The programmer-visible hardware is identical to CY-1: no page of this manual changes.</td></tr>
+<tr><td>Change notice 2</td><td>October 1990</td><td><a class="xref" href="#cart-generations"></a></td><td>Deep cartridge boards (512 KiB to 1 MiB ROM, optional battery-backed RAM). Insert the replacement cartridge pages.</td></tr>
+</tbody>
+</table>
+
+<h2 class="unnumbered" id="front-using">Using this manual</h2>
+<p>Chapter 1 introduces the whole machine: its parts, its clocks and its memory map. Chapters 2 and 3 describe the Tally processor completely, instruction by instruction, together with reset, interrupts and the timer. Chapter 4 covers cartridges. Chapters 5 and 6 describe the Barndoor video chip, including the light field, and the Cue audio chip. Chapter 7 covers the controllers, chapter 8 the CYASM assembler supplied with the development kit, and chapter 9 works through complete example routines with their machine code. The appendices contain implementation notes and a summary of every I/O register.</p>
+<p>Everything a program can observe is specified here. Where the hardware leaves a result undefined, this manual says so and states the behaviour of the Avenell reference model; software must not depend on undefined behaviour.</p>
+
+<div class="out-of-world">
+<p><strong>Note for present-day readers (outside the fiction)</strong></p>
+<p>This manual is part of a work of alternate-history fiction. The Avenell Cyclorama, Avenell Stagecraft Ltd. and every person, product and document named here are invented; no such console was sold in 1987. The machine is being built for real, as software, from this specification: the manual is written in the voice of a 1987 engineering document, but its technical content is exact and normative for the emulator, assembler and tools in this project.</p>
+</div>
+
+<!--GEN:toc-->

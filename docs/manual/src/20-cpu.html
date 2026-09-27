@@ -1,0 +1,144 @@
+<!-- SPDX-FileCopyrightText: 2026 rick-learns -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<h2 id="cpu">2 The Tally processor</h2>
+
+<p>Tally (part AV-1601) is Avenell's own 16-bit processor, named after the red lamp that tells a camera crew which camera is live. It has eight fully orthogonal general registers, a separate stack pointer, a byte-addressed 64 KiB address space and a regular instruction set in which every instruction is one 16-bit word, optionally followed by one 16-bit extension word. This chapter is a complete description: an engineer can build a compatible processor, or a simulator, from it alone.</p>
+
+<h3 id="cpu-model">Programming model</h3>
+<table class="ruled">
+<thead><tr><th>Register</th><th>Width</th><th>Purpose</th><th>After reset</th></tr></thead>
+<tbody>
+<tr><td><code>R0</code>–<code>R7</code></td><td>16</td><td>General registers. Every instruction that takes a register accepts any of the eight; none has a special role.</td><td>0000</td></tr>
+<tr><td><code>SP</code></td><td>16</td><td>Stack pointer. The stack grows downward; SP points at the most recently pushed word. Bit 0 is always 0.</td><td>C000</td></tr>
+<tr><td><code>PC</code></td><td>16</td><td>Program counter: the address of the next instruction word to be fetched.</td><td>word at 0000</td></tr>
+<tr><td><code>F</code></td><td>5</td><td>Flags: Z, N, C, V and the interrupt enable I.</td><td>0000 (interrupts disabled)</td></tr>
+</tbody>
+</table>
+<p>The flag register F:</p>
+<table class="ruled">
+<thead><tr><th>Bit</th><th>Name</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>Z</td><td>Zero: the result was 0000.</td></tr>
+<tr><td>1</td><td>N</td><td>Negative: bit 15 of the result.</td></tr>
+<tr><td>2</td><td>C</td><td>Carry after addition, <em>borrow</em> after subtraction and comparison, last bit shifted out after a shift.</td></tr>
+<tr><td>3</td><td>V</td><td>Signed overflow: the two's complement result does not fit in 16 bits.</td></tr>
+<tr><td>4</td><td>I</td><td>Interrupt enable: 1 = maskable interrupts are accepted.</td></tr>
+<tr><td>15–5</td><td>—</td><td>Always read 0.</td></tr>
+</tbody>
+</table>
+<p>F is saved on the stack by interrupts and TRAP, restored by RTI, and can be read and written whole with GETF and SETF.</p>
+
+<h3 id="cpu-memory">Memory access</h3>
+<ul>
+<li>The address space is byte-addressed and little-endian: the word at address a has its low byte at a and its high byte at a + 1.</li>
+<li>Word accesses ignore address bit 0. A word access to an odd address a reads or writes the word at a &amp; FFFE. Every load of PC (reset, jumps, calls, returns, table jumps, interrupt and TRAP entry) clears bit 0, so instructions are always fetched from even addresses and every return address pushed is even.</li>
+<li>Byte loads (LDB) zero-extend the byte into the register. Byte stores (STB) change exactly one byte of RAM.</li>
+<li>Address arithmetic wraps at 16 bits: FFFE + 4 = 0002.</li>
+<li>Every bus access — an instruction word fetch, an extension word fetch, a data read or a data write — takes 2 CPU cycles. The cycle counts in this chapter are totals that include every access.</li>
+<li>Instruction fetches, extension fetches, stack pushes and pops (PUSH, POP, PUSHM, POPM, CALL, BSR, RTS, RTI, TRAP) and the pushes of interrupt entry are ordinary bus accesses. If one of them addresses an I/O register it has the same side effects and wait cycles as a data access to that register: a fetch from VDATA advances VADDR, and a POP from VSTAT clears its overflow bit. The accesses of an instruction happen in program order: its fetches first, then its data accesses in the order its operation performs them. No sensible program does this, but the result is defined.</li>
+</ul>
+
+<h3 id="cpu-flags">Flag conventions</h3>
+<p>Every instruction's effect on the flags is listed in the instruction reference. The rules are uniform:</p>
+<table class="ruled">
+<thead><tr><th>Instructions</th><th>Z, N</th><th>C</th><th>V</th></tr></thead>
+<tbody>
+<tr><td>ADD, ADC, INC, ADDQ</td><td>from result</td><td>unsigned carry out of bit 15</td><td>signed overflow</td></tr>
+<tr><td>SUB, SBC, CMP, DEC, NEG</td><td>from result</td><td><em>borrow</em>: 1 if the unsigned subtrahend (plus borrow in, for SBC) is larger than the minuend. For CMP a,b: C = 1 exactly when a &lt; b unsigned.</td><td>signed overflow</td></tr>
+<tr><td>MOV, MOVQ, SXB, ZXB, SWPB</td><td>from result</td><td>unchanged</td><td>unchanged</td></tr>
+<tr><td>NOT, AND, OR, XOR, TST</td><td>from result</td><td>0</td><td>0</td></tr>
+<tr><td>SHL, SHR, ASR, ROL (all forms), count n ≠ 0</td><td>from result</td><td>last bit shifted out (ROL: bit 0 of the result)</td><td>0</td></tr>
+<tr><td>SHL, SHR, ASR, ROL, count n = 0</td><td>from the unchanged value</td><td>unchanged</td><td>0</td></tr>
+<tr><td>MUL</td><td>from result</td><td>1 if the full product exceeds FFFF</td><td>0</td></tr>
+<tr><td>FMUL</td><td>from result</td><td>0</td><td>1 if the shifted product does not fit in signed 16 bits</td></tr>
+<tr><td>Loads, stores, PUSH, POP, PUSHM, POPM, moves to or from SP, ADD SP, jumps, calls, branches, EI, DI, NOP, WAI, STOP, GETF</td><td colspan="3">not affected</td></tr>
+<tr><td>SETF, RTI</td><td colspan="3">all of F loaded (SETF from the register, RTI from the stack)</td></tr>
+</tbody>
+</table>
+<p>Because C is a borrow after subtraction, the unsigned conditions read naturally: after <code>CMP R0, R1</code>, <code>BLO</code> (C = 1) branches when R0 &lt; R1 and <code>BHS</code> (C = 0) when R0 ≥ R1. The assembler also accepts <code>BCS</code> and <code>BCC</code> for these.</p>
+<p>Two's complement overflow V is 1 when the true signed result of the operation lies outside −32768…32767. For shifts, the count n is the value used by the shift (see the individual instructions); counts are never negative.</p>
+
+<h3 id="cpu-addressing">Addressing modes</h3>
+<table class="ruled">
+<thead><tr><th>Mode</th><th>CYASM syntax</th><th>Effective address or operand</th><th>Used by</th></tr></thead>
+<tbody>
+<tr><td>Register</td><td><code>Rs</code></td><td>the register's value</td><td>ALU group 1, unary group 0</td></tr>
+<tr><td>Immediate, 16-bit</td><td><code>#expr</code></td><td>the extension word</td><td>ALU group 2</td></tr>
+<tr><td>Quick immediate</td><td><code>#expr</code></td><td>signed 8-bit field, sign-extended</td><td>MOVQ, ADDQ (group 3)</td></tr>
+<tr><td>Short immediate</td><td><code>#n</code></td><td>4-bit field</td><td>TRAP, shift-by-immediate (group 0)</td></tr>
+<tr><td>Register indirect with short displacement</td><td><code>[Rs+d]</code>, <code>[Rs]</code></td><td>Rs + d; d = 0…126 even (words) or 0…63 (bytes)</td><td>groups 4–7</td></tr>
+<tr><td>Register indirect with 16-bit displacement</td><td><code>[Rs+expr]</code></td><td>(Rs + d16) &amp; FFFF</td><td>group 8, mode 00</td></tr>
+<tr><td>Absolute</td><td><code>[expr]</code></td><td>the extension word</td><td>group 8, mode 01</td></tr>
+<tr><td>Post-increment</td><td><code>[Rs]+</code></td><td>Rs; then Rs += 2 (word) or 1 (byte)</td><td>group 8, mode 10</td></tr>
+<tr><td>Pre-decrement</td><td><code>-[Rs]</code></td><td>Rs −= 2 (word) or 1 (byte); then Rs</td><td>group 8, mode 11</td></tr>
+<tr><td>Stack relative</td><td><code>[SP+d]</code></td><td>SP + d; d = 0…510 even; words only</td><td>group 9</td></tr>
+<tr><td>PC relative</td><td><code>label</code></td><td>next + disp × 2; disp = −128…127</td><td>branches (group A)</td></tr>
+<tr><td>Absolute jump</td><td><code>label</code></td><td>the extension word</td><td>JMP, CALL</td></tr>
+<tr><td>Register jump</td><td><code>[Rd]</code></td><td>Rd</td><td>JMP [Rd], CALL [Rd]</td></tr>
+<tr><td>Table</td><td><code>Rd, table</code></td><td>the word at table + Rd × 2</td><td>JMPT</td></tr>
+</tbody>
+</table>
+<p>"next" is always the address of the instruction following the current one, after any extension word.</p>
+
+<h3 id="cpu-formats">Instruction formats</h3>
+<p>Every instruction is one 16-bit word, stored little-endian, optionally followed by one 16-bit extension word. Bits 15–12 of the first word, the <dfn>major group</dfn>, select the format:</p>
+<!--GEN:instruction-layouts-->
+<p>Register fields are three bits: 000 = R0 … 111 = R7. <code>ddd</code> is the destination (or, for stores, the register whose value is stored) and <code>sss</code> the source or base register.</p>
+<p>An <dfn>extension word</dfn> follows the first word in exactly these cases:</p>
+<ul>
+<li>group 2 (ALU with 16-bit immediate): the immediate;</li>
+<li>group 8 with mode 00 (<code>[Rs+d16]</code>) or mode 01 (<code>[abs16]</code>): the displacement or address;</li>
+<li>group B with operation 0 (JMP), 1 (CALL) or 5 (JMPT): the target or table address.</li>
+</ul>
+<p>No other instruction, including every reserved encoding, has an extension word. The instruction length therefore depends only on the first word, and a disassembler can always find the next instruction.</p>
+<p>Bits marked 0 in a layout but not used by an instruction (for example bits 1–0 of group 1, or the source field of group 2) are <dfn>must-be-zero</dfn> bits. The assembler writes 0; the processor ignores them.</p>
+
+<h4 id="cpu-decode">Decoding</h4>
+<p>The following procedure decodes any first word w (the numbers are decimal operation numbers; the tables are in the instruction reference):</p>
+<pre>major ← w &gt;&gt; 12
+0:     op ← (w &gt;&gt; 7) &amp; 31;  d ← (w &gt;&gt; 4) &amp; 7;  imm4 ← w &amp; 15
+       op 0–26 as listed under group 0;  op 27–31 reserved
+1, 2:  op ← (w &gt;&gt; 8) &amp; 15;  d ← (w &gt;&gt; 5) &amp; 7;  s ← (w &gt;&gt; 2) &amp; 7 (group 1 only)
+3:     d ← (w &gt;&gt; 9) &amp; 7;  q ← (w &gt;&gt; 8) &amp; 1 (0 MOVQ, 1 ADDQ);  imm ← sx8(w &amp; 255)
+4–7:   byte ← major ≥ 6;  store ← major odd;  d ← (w &gt;&gt; 9) &amp; 7;  s ← (w &gt;&gt; 6) &amp; 7
+       disp ← (w &amp; 63) × (byte ? 1 : 2)
+8:     d ← (w &gt;&gt; 9) &amp; 7;  s ← (w &gt;&gt; 6) &amp; 7;  byte ← bit 5;  store ← bit 4;  mode ← (w &gt;&gt; 2) &amp; 3
+9:     d ← (w &gt;&gt; 9) &amp; 7;  store ← bit 8;  disp ← (w &amp; 255) × 2
+A:     cond ← (w &gt;&gt; 8) &amp; 15;  disp ← sx8(w &amp; 255)
+B:     op ← (w &gt;&gt; 8) &amp; 15:  0 JMP, 1 CALL, 2 PUSHM (mask = w &amp; 255), 3 POPM (mask),
+       4 ADDSP (s8 = w &amp; 255; SP changes by sx8(s8) × 2), 5 JMPT (d ← (w &gt;&gt; 5) &amp; 7);  6–15 reserved
+C–F:   reserved</pre>
+<p>Every one of the 65,536 possible first words decodes to exactly one instruction or to a reserved encoding. The opcode map, <a class="xref" href="#cpu-opmap"></a>, shows the whole space.</p>
+
+<h3 id="cpu-cycles">Cycle counts</h3>
+<p>Instruction timing is simple and exact. Each bus access costs 2 cycles, and most instructions cost nothing beyond their accesses. A register ALU operation is one fetch (2 cycles); an immediate ALU operation fetches two words (4); a short load fetches one word and reads one (4); a load with an extension word fetches two and reads one (6). The rules:</p>
+<!--GEN:cycle-table-->
+<ul>
+<li><strong>Shifts and rotates</strong> add one cycle per bit of the count n actually used: n = Rs &amp; 15 for the register form, imm &amp; 15 for the group 2 immediate form, and n = 1…16 for the group 0 form (SHL Rd,#n). A shift with count 0 adds nothing.</li>
+<li><strong>Branches</strong> cost more when taken. BRA is always taken.</li>
+<li><strong>PUSHM and POPM</strong> cost the base plus one word access per register in the mask.</li>
+<li><strong>WAI</strong> costs its base cycles and then as long as it waits.</li>
+<li><strong>Video ports.</strong> Each read or write of VDATA, OAMDATA or CRAMDATA made during active display (dots 0–255 of lines 0–223) adds wait cycles, as listed, whether it is a data access, a fetch or a stack access. In blanking the ports run at full speed.</li>
+<li><strong>DMA.</strong> Writing DMACTL stops the processor for the whole transfer, 4 + 2 × DMALEN cycles if the transfer starts outside active display, or 4 + 4 × DMALEN if it starts during active display. The stop is in addition to the cycles of the store instruction itself, belongs to that instruction, and interrupts are recognised only after it. The transfer starts at the start time of the store (<a class="xref" href="#ov-model"></a>). Only the beam position at the start of the transfer matters: a transfer that starts in vertical blank and runs on into line 0 keeps the lower rate. The DMA channel is described with the video chip, <a class="xref" href="#vid-dma"></a>.</li>
+<li><strong>Interrupt entry</strong> takes its own cycles between two instructions (<a class="xref" href="#sys-interrupts"></a>): 12, plus any port wait cycles its two pushes incur.</li>
+</ul>
+<p>With 228 CPU cycles per line, a register ALU operation takes 1/114 of a line; a frame holds room for about 30,000 of them.</p>
+
+<h3 id="cpu-reading">Reading the instruction reference</h3>
+<p>The reference that follows lists every instruction in encoding order. Each entry gives:</p>
+<dl class="defs">
+<dt>Forms</dt>
+<dd>One row per encoding: the CYASM syntax, the first word as a bit diagram (fixed bits printed 0 or 1, variable fields shaded and named, ignored must-be-zero fields shown grey), the base word (the first word with every variable field 0), the extension word if any, and the cycle count.</dd>
+<dt>Operation</dt>
+<dd>Pseudo-code. <code>←</code> is assignment; arithmetic is modulo 65536 (16 bits) unless noted; <code>mem16[a]</code> is the word at a &amp; FFFE and <code>mem8[a]</code> the byte at a; <code>sx8(x)</code> sign-extends an 8-bit value to 16 bits; <code>s(x)</code> is the signed (two's complement) value of x; <code>push(x)</code> means SP ← SP − 2 then mem16[SP] ← x; <code>pop()</code> means read mem16[SP] then SP ← SP + 2; <code>next</code> is the address of the following instruction; <code>src</code> is the second operand (Rs, or the immediate).</dd>
+<dt>Flags</dt>
+<dd><code>*</code> set from the result (Z = result is 0, N = bit 15 of the result); <code>–</code> not affected; <code>0</code> cleared; <code>carry</code> unsigned carry out; <code>borrow</code> unsigned borrow; <code>ovf</code> signed overflow; <code>out</code> the last bit shifted out (see the flag conventions for count 0); <code>&gt;FFFF</code> product too large; <code>pop</code> loaded from the stack; <code>Rd</code> loaded from the register.</dd>
+</dl>
+
+<h3 id="cpu-reference">Instruction reference</h3>
+<p>Instructions are grouped by major group, in encoding order.</p>
+<!--GEN:instruction-reference-->
+
+<h3 id="cpu-opmap">Opcode map</h3>
+<p>Each cell is one value of the high byte (bits 15–8) of the first word; rows give bits 15–12 and columns bits 11–8. A cell lists every instruction whose first word has that high byte. Group 0 holds two operations per cell, because its operation field (bits 11–7) reaches one bit into the low byte; cell 0D holds SETF and a reserved operation, and cells 0E and 0F hold only reserved operations. Group 8 cells list LD, ST, LDB and STB, which differ only in bits 5–4. Group B has one operation per cell, as do groups 1, 2 and A; groups 3–9 carry a register number in bits 11–9, shown in small type. Hatched cells are reserved.</p>
+<!--GEN:opcode-map-->
